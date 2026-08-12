@@ -18,8 +18,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const serverPath = join(here, '..', 'index.js');
 const repoRoot = join(here, '..', '..');
 
-const EXTENSION_ID = 'mjnnkmbiaoheconngckmilheckmepnam';
-const OUR_ORIGIN = `chrome-extension://${EXTENSION_ID}`;
+// The unpacked/dev ID derived from key.pem. The published Chrome Web Store ID is
+// assigned by CWS at first upload and is injected via SARTEL_BROWSER_MCP_EXTENSION_ID
+// (or baked in) before the npm package is published — see store/SUBMIT.md.
+const DEV_EXTENSION_ID = 'mjnnkmbiaoheconngckmilheckmepnam';
+const OUR_ORIGIN = `chrome-extension://${DEV_EXTENSION_ID}`;
+const STORE_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; // stands in for a CWS-assigned ID
 
 /** Spawn the MCP server and resolve once it reports the port it bound. */
 function startServer(env = {}) {
@@ -71,12 +75,12 @@ function handshake(port, origin) {
   });
 }
 
-test('the pinned manifest key and the server allowlist name the same extension', () => {
+test('the pinned manifest key and the server fallback name the same extension', () => {
   const manifest = JSON.parse(readFileSync(join(repoRoot, 'extension', 'manifest.json'), 'utf8'));
   assert.equal(typeof manifest.key, 'string');
   assert.ok(manifest.key.length > 300, 'manifest must pin the public key');
   const source = readFileSync(serverPath, 'utf8');
-  assert.ok(source.includes(EXTENSION_ID), 'server must allowlist the pinned extension ID');
+  assert.ok(source.includes(DEV_EXTENSION_ID), 'server must fall back to the dev extension ID');
 });
 
 test('origin gate', async (t) => {
@@ -123,6 +127,41 @@ test('SARTEL_BROWSER_MCP_ALLOWED_ORIGIN adds exactly one extra origin', async (t
   stillOurs.ws.close();
 
   const denied = await handshake(port, 'http://localhost:5174');
+  assert.equal(denied.outcome, 'rejected');
+  assert.equal(denied.status, 403);
+});
+
+test('SARTEL_BROWSER_MCP_EXTENSION_ID replaces the extension the gate accepts', async (t) => {
+  const server = startServer({ SARTEL_BROWSER_MCP_EXTENSION_ID: STORE_ID });
+  const port = await server.ready;
+  t.after(() => server.child.kill('SIGKILL'));
+
+  const store = await handshake(port, `chrome-extension://${STORE_ID}`);
+  assert.equal(store.outcome, 'open', 'the injected store ID is accepted');
+  store.ws.close();
+
+  // The override replaces the fallback rather than adding to it: a published
+  // server must not keep trusting the development identity.
+  const dev = await handshake(port, OUR_ORIGIN);
+  assert.equal(dev.outcome, 'rejected');
+  assert.equal(dev.status, 403);
+});
+
+test('the ID override and the escape hatch compose', async (t) => {
+  const server = startServer({
+    SARTEL_BROWSER_MCP_EXTENSION_ID: STORE_ID,
+    SARTEL_BROWSER_MCP_ALLOWED_ORIGIN: OUR_ORIGIN,
+  });
+  const port = await server.ready;
+  t.after(() => server.child.kill('SIGKILL'));
+
+  for (const origin of [`chrome-extension://${STORE_ID}`, OUR_ORIGIN]) {
+    const r = await handshake(port, origin);
+    assert.equal(r.outcome, 'open', `${origin} is accepted`);
+    r.ws.close();
+  }
+
+  const denied = await handshake(port, 'https://evil.example');
   assert.equal(denied.outcome, 'rejected');
   assert.equal(denied.status, 403);
 });

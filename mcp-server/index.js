@@ -46,14 +46,27 @@ let parentCheck = null;
 // process — and any web page the user visits, since a page may open a socket to
 // 127.0.0.1 — drive a fully logged-in browser. We accept only our own extension.
 //
-// The extension ID is pinned: extension/manifest.json carries the public half of
-// a generated keypair, so the unpacked build, the Chrome Web Store build and this
-// allowlist all derive the same ID.
-//
 // Known and accepted limitation: a malicious local process can forge an Origin
 // header. That process already runs as the user.
+//
+// ── About the ID below ──
+//
+// DEV_EXTENSION_ID is derived from the keypair in the repo root (key.pem, whose
+// public half is pinned as "key" in extension/manifest.json). It is the ID of the
+// UNPACKED development build and nothing else.
+//
+// It is NOT the published Chrome Web Store ID. The Web Store rejects a first
+// upload whose manifest carries a "key" field; it generates its own keypair and
+// assigns the ID at that upload. The manifest "key" field is how the CWS-issued
+// public key is put back afterwards so unpacked builds match the published ID.
+//
+// So: before `npm publish`, the CWS-assigned ID must be baked in here (replace
+// DEV_EXTENSION_ID) or supplied via SARTEL_BROWSER_MCP_EXTENSION_ID. A published
+// package still carrying the dev fallback will refuse every store user's
+// extension. See store/SUBMIT.md for the ordering.
+const DEV_EXTENSION_ID = 'mjnnkmbiaoheconngckmilheckmepnam';
 
-export const EXTENSION_ID = 'mjnnkmbiaoheconngckmilheckmepnam';
+export const EXTENSION_ID = (process.env.SARTEL_BROWSER_MCP_EXTENSION_ID || DEV_EXTENSION_ID).trim();
 
 export function allowedOrigins() {
   const origins = [`chrome-extension://${EXTENSION_ID}`];

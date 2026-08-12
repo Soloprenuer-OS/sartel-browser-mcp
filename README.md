@@ -36,20 +36,22 @@ The MCP server is the WebSocket *server*; the extension is the client. Any local
 web page the user visits — a page can open a WebSocket to `127.0.0.1` — could otherwise connect and
 drive a fully authenticated browser.
 
-So the server verifies the handshake `Origin` and accepts only
+So the server verifies the handshake `Origin` and accepts exactly one
+`chrome-extension://<id>` origin, plus, if set, the single origin in
+`SARTEL_BROWSER_MCP_ALLOWED_ORIGIN` (a development escape hatch). Everything else, including a
+handshake with no `Origin` header at all, is refused with `403`.
 
-```
-chrome-extension://mjnnkmbiaoheconngckmilheckmepnam
-```
+Which ID that is:
 
-plus, if set, the single origin in `SARTEL_BROWSER_MCP_ALLOWED_ORIGIN` (a development escape
-hatch). Everything else, including a handshake with no `Origin` header at all, is refused with
-`403`.
-
-That ID is fixed because `extension/manifest.json` pins the public half of an RSA keypair as
-`"key"`. Chrome derives the extension ID from that key, so the unpacked development build, the
-Chrome Web Store build, and the server's allowlist all agree — and the ID is known before first
-publication, which it otherwise would not be.
+- **Development.** `extension/manifest.json` pins the public half of a local RSA keypair as
+  `"key"`, so the unpacked build always loads as `mjnnkmbiaoheconngckmilheckmepnam`. That is the
+  server's built-in fallback.
+- **Published.** The Chrome Web Store rejects a first upload whose manifest carries a `"key"`
+  field: it generates its own keypair and assigns the ID at that upload. The real ID is therefore
+  known only *after* the first draft upload, and must then be put back into the manifest as
+  `"key"` and into the server — baked in, or supplied as `SARTEL_BROWSER_MCP_EXTENSION_ID`.
+  **Publishing the npm package before that ships a server that refuses every store user's
+  extension.** [`store/SUBMIT.md`](store/SUBMIT.md) has the ordering.
 
 **Known limitation, accepted deliberately:** a malicious *local* process can forge an `Origin`
 header. That process already runs as the user. A pairing token was considered and rejected as
@@ -86,8 +88,9 @@ Load `extension/` unpacked at `chrome://extensions` with Developer mode on. Beca
 pins `"key"`, the unpacked build gets the same ID the store build will, so the origin gate accepts
 it.
 
-`key.pem` is **not** in this repository and must never be committed. Losing it means losing the
-extension's identity.
+`key.pem` is **not** in this repository and must never be committed. It is the *development*
+identity only — the published extension's keypair is held by the Chrome Web Store — so losing it
+costs a stable unpacked ID, nothing more.
 
 ## Licence
 
