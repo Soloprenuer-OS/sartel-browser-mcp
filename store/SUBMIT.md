@@ -7,6 +7,17 @@ Submit, which only you can do.
 does not exist until step 3, and three later things depend on it. Doing them in the wrong order
 ships a broken npm package to every user.
 
+> **This first submission is manual, and that is not a gap in the tooling.** The Chrome Web Store
+> API can upload a package and set a publish state; it cannot set *any* listing metadata —
+> description, screenshots, category, permission justifications, privacy practices, the
+> data-collection declaration. There is no API for those at all. So steps 0, 7 and 10 below are
+> irreducibly dashboard work.
+>
+> **Version 1.0.1 onwards is one command.** `docs/CWS_PUBLISH_SETUP.md` sets up API credentials
+> once, after which `./scripts/publish-cws.sh` builds, uploads and submits a new version without
+> touching the dashboard. Doing that setup now also makes steps 3 and 6 below scriptable — see the
+> notes on those steps.
+
 ---
 
 ## Why the order matters
@@ -75,6 +86,13 @@ either.
    `key field is not allowed in manifest` error.
 3. The item is created as a **draft**. **Do not publish, do not submit for review yet.**
 
+Optional, if you have already done the one-time setup in `docs/CWS_PUBLISH_SETUP.md`: the same
+thing from the terminal, which also prints the Item ID you need in step 4.
+
+```sh
+./scripts/cws-create-item.sh
+```
+
 ## Step 4 — Read the assigned identity
 
 On the item's **Package** tab (or the item URL, which ends in the ID):
@@ -113,6 +131,10 @@ Write both down. If the public key is offered as a `.pem`, take only the base64 
 ```
 
 Upload **`dist/sartel-1.0.0.zip`** to the same draft item, replacing the package.
+
+Or, with API credentials configured, `./scripts/publish-cws.sh --draft` does the build and the
+upload and leaves the item a draft. It refuses to upload the key-stripped zip here, which is the
+mistake this step invites.
 
 ## Step 7 — Fill in the listing
 
@@ -193,6 +215,18 @@ Dashboard → **Submit for review**. Reviews typically take a few days; an exten
 
 If a question comes back, `store/PERMISSIONS.md` ends with the two answers that cover nearly all of
 them. Reply with the mechanism, not with reassurance.
+
+## Step 11 — Every release after this one
+
+Bump `version` in `extension/manifest.json`, then:
+
+```sh
+./scripts/publish-cws.sh
+```
+
+Build, upload, submit for review — no dashboard. Requires the one-time setup in
+`docs/CWS_PUBLISH_SETUP.md`. Listing text and screenshots stay as you left them in step 7;
+changing *those* still means the dashboard, because no API reaches them.
 
 ---
 
