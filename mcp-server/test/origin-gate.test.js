@@ -13,16 +13,17 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { createHash } from 'node:crypto';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const serverPath = join(here, '..', 'index.js');
 const repoRoot = join(here, '..', '..');
 
-// The unpacked/dev ID derived from key.pem. The published Chrome Web Store ID is
-// assigned by CWS at first upload and is injected via SARTEL_BROWSER_MCP_EXTENSION_ID
-// (or baked in) before the npm package is published — see store/SUBMIT.md.
-const DEV_EXTENSION_ID = 'mjnnkmbiaoheconngckmilheckmepnam';
-const OUR_ORIGIN = `chrome-extension://${DEV_EXTENSION_ID}`;
+// The real Chrome Web Store ID, assigned at item creation. Its public key is
+// pinned in extension/manifest.json, so the unpacked build and the store build
+// derive the same ID — the test below proves that rather than trusting it.
+const PUBLISHED_EXTENSION_ID = 'ibkmogfbmahilhjcafoahjifiiinmnlf';
+const OUR_ORIGIN = `chrome-extension://${PUBLISHED_EXTENSION_ID}`;
 const STORE_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; // stands in for a CWS-assigned ID
 
 /** Spawn the MCP server and resolve once it reports the port it bound. */
@@ -75,12 +76,27 @@ function handshake(port, origin) {
   });
 }
 
-test('the pinned manifest key and the server fallback name the same extension', () => {
+// The single check that keeps a published server able to talk to a published
+// extension. Chrome derives an extension's ID from the manifest's public key; the
+// server allowlists an ID. If those two ever drift apart, every store user's
+// extension is refused by its own server, and nothing else in this suite notices —
+// the fake client in the other tests uses whatever origin it is handed.
+//
+// So: derive the ID the way Chrome does and compare, rather than grepping for a
+// string that could be stale in either file.
+test('the pinned manifest key derives the ID the server allowlists', () => {
   const manifest = JSON.parse(readFileSync(join(repoRoot, 'extension', 'manifest.json'), 'utf8'));
   assert.equal(typeof manifest.key, 'string');
   assert.ok(manifest.key.length > 300, 'manifest must pin the public key');
+
+  const digest = createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest('hex');
+  const derived = [...digest.slice(0, 32)]
+    .map((c) => String.fromCharCode(97 + parseInt(c, 16)))
+    .join('');
+
+  assert.equal(derived, PUBLISHED_EXTENSION_ID, 'manifest key must derive the published ID');
   const source = readFileSync(serverPath, 'utf8');
-  assert.ok(source.includes(DEV_EXTENSION_ID), 'server must fall back to the dev extension ID');
+  assert.ok(source.includes(PUBLISHED_EXTENSION_ID), 'server must allowlist the published ID');
 });
 
 // The store rejects the whole upload over this, and it costs a full round trip to

@@ -3,7 +3,7 @@
   "name": "Sartel",
   "version": "1.0.0",
   "description": "Let your local Sartel agent drive your own logged-in Chrome: navigate, click, fill forms, read pages, screenshot. All on 127.0.0.1.",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq0mM3Gxv1BUkPJaq98tM8ITNyHl0LHPqhN97dUKqSb9+9adACQ+spgRLnuFOK+XJM34ZiQp3wy8QZ/PYJ28LRjcUe4NBnxzJ5qeMDqJPNHCZaOGTXQT/gProTtkMtEeQq9GH/VuDJtBWNs7RY6RgHModdWpie+es8s3W+UeS+4nFqxgRtqMNGFzotRAVKGc4YQssOjA4Gh4W8BhC63+TbLaVBcQ9pEpvoUnlN4YVPBu/ACHBDAfumPAHmAwMy8yb7AWH6MyfZS1dKl975VImI9zcFpFE9EnR9y/FhjwX+FSXUDQt7GwofvWTaZ/9ZfyIr5jZdJciKvUm14LXUitXpwIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlLHezZn7Na+AzRWEoGH9TDQtJBviy8EGbW/pqi3DvF6FCD3/tnwwlsWfQS1a5RZRaph88ViVFY1ky3oWUCZoIvVdvOyYS5QqD0hBlgZj49PNONhky4+fPI3xuyVwApD7NBPmOkF4SZtBCw/Wq/5/Cak10f1AntRFR+EX3F/C+jcLStGZssqKu3oQGch/Dv55Uss7A2V5HYHid2gPJBj9zmC0QgLJgGSeVXg45bnf3DzQI6zhAHDwnYdGQiReBzeZ9VFtfqghRgo7gegse0NnryPahbnaeKL+Jpp7lLqBzaozRg/hmeRdvw+sGn7dBpcZOQiQwGxq1h9RANoPcHVg8wIDAQAB",
   "permissions": [
     "clipboardRead",
     "clipboardWrite",

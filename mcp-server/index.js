@@ -51,22 +51,21 @@ let parentCheck = null;
 //
 // ── About the ID below ──
 //
-// DEV_EXTENSION_ID is derived from the keypair in the repo root (key.pem, whose
-// public half is pinned as "key" in extension/manifest.json). It is the ID of the
-// UNPACKED development build and nothing else.
+// This is the REAL Chrome Web Store identity, assigned by CWS at item creation
+// (item ibkmogfbmahilhjcafoahjifiiinmnlf). Its public key is pinned as "key" in
+// extension/manifest.json, so Chrome derives the same ID for the unpacked build
+// and the store build — one ID, one allowlist entry, no divergence.
 //
-// It is NOT the published Chrome Web Store ID. The Web Store rejects a first
-// upload whose manifest carries a "key" field; it generates its own keypair and
-// assigns the ID at that upload. The manifest "key" field is how the CWS-issued
-// public key is put back afterwards so unpacked builds match the published ID.
+// Getting here required an ordering that is easy to get backwards: CWS REJECTS a
+// first upload whose manifest carries a "key" field. It generates the keypair and
+// assigns the ID at that upload; the "key" field is how that CWS-issued public key
+// is put back afterwards. So the ID could only be learned, never chosen.
 //
-// So: before `npm publish`, the CWS-assigned ID must be baked in here (replace
-// DEV_EXTENSION_ID) or supplied via SARTEL_BROWSER_MCP_EXTENSION_ID. A published
-// package still carrying the dev fallback will refuse every store user's
-// extension. See store/SUBMIT.md for the ordering.
-const DEV_EXTENSION_ID = 'mjnnkmbiaoheconngckmilheckmepnam';
+// The repo-root key.pem is now dead weight — it produced the pre-submission
+// stand-in ID and nothing signs with it any more.
+const PUBLISHED_EXTENSION_ID = 'ibkmogfbmahilhjcafoahjifiiinmnlf';
 
-export const EXTENSION_ID = (process.env.SARTEL_BROWSER_MCP_EXTENSION_ID || DEV_EXTENSION_ID).trim();
+export const EXTENSION_ID = (process.env.SARTEL_BROWSER_MCP_EXTENSION_ID || PUBLISHED_EXTENSION_ID).trim();
 
 export function allowedOrigins() {
   const origins = [`chrome-extension://${EXTENSION_ID}`];
