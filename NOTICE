@@ -1,0 +1,31 @@
+Sartel Browser MCP
+Copyright (c) 2026 Sartel
+
+This product is a fork of Browser MCP by Agent360:
+
+    https://github.com/Agent360dk/browser-mcp
+    Copyright (c) 2026 Agent360
+    Licensed under the MIT License
+
+Substantial portions of the Chrome extension (extension/) and the MCP server
+(mcp-server/) are the original work of Agent360 and remain under their
+copyright. The MIT License text distributed with this software (see LICENSE)
+is Agent360's, carried over verbatim as that licence requires, and it governs
+this fork as a whole.
+
+Changes made in this fork:
+
+  * Rebranded to Sartel; the extension is published as "Sartel".
+  * The WebSocket server now verifies the handshake Origin and accepts only
+    the Sartel extension (plus one optional development origin), rather than
+    accepting any local connection.
+  * The extension pins a public key in its manifest so its ID is fixed and
+    known ahead of publication.
+  * `browser_solve_captcha` was replaced by `browser_captcha_handoff`. The
+    CAPTCHA checkbox auto-click, image-grid clicking, and vision-assisted
+    solving paths were removed. What remains detects a CAPTCHA and hands it
+    to the human.
+  * The git-pull self-update on server startup, the extension-copying
+    `install` CLI subcommand, and upstream's bundled copy of the extension
+    inside the npm package were removed; the extension is distributed through
+    the Chrome Web Store.

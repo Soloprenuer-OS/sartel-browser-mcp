@@ -1,0 +1,50 @@
+{
+  "name": "@sartel/browser-mcp",
+  "version": "1.0.0",
+  "description": "Sartel Browser MCP — a local stdio MCP server that lets a Sartel agent drive the user's real, logged-in Chrome through the Sartel browser extension. Fork of Agent360dk/browser-mcp (MIT).",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "sartel-browser-mcp": "./bin/cli.js"
+  },
+  "files": [
+    "index.js",
+    "tools.js",
+    "bin/",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "browser",
+    "browser-automation",
+    "chrome",
+    "chrome-extension",
+    "sartel",
+    "ai-agent",
+    "human-in-the-loop",
+    "web-automation"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "author": {
+    "name": "Sartel",
+    "url": "https://sartel.ai"
+  },
+  "license": "MIT",
+  "homepage": "https://sartel.ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Soloprenuer-OS/sartel-browser-mcp.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "ws": "^8.18.0"
+  }
+}

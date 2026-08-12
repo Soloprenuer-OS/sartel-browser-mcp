@@ -1,0 +1,12 @@
+# Extension signing key — pins the extension ID. NEVER commit. Back it up offline:
+# losing it means losing the published extension identity.
+key.pem
+*.pem
+
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.*
+.npmrc
