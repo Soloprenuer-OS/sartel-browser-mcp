@@ -1,8 +1,6 @@
 /**
  * Sartel Browser MCP — Background Service Worker
  *
- * Fork of Agent360dk/browser-mcp (MIT, © 2026 Agent360). See ../NOTICE.
- *
  * Handles Chrome API calls relayed from the offscreen document.
  * Each MCP session (port) gets its own Chrome Tab Group with color coding.
  * Tabs are isolated per session — no cross-session interference.
@@ -1809,7 +1807,7 @@ async function dispatch(port, method, params) {
       const result = { title: updated.title, url: updated.url, tab_id: tab.id, session: session.label };
       if (captcha && captcha.found) {
         result.captcha_detected = captcha.types.join(', ');
-        result.hint = `CAPTCHA detected: ${captcha.types.join(', ')}. Use browser_captcha_handoff to identify it, then browser_ask_user to let the user complete it.`;
+        result.hint = `CAPTCHA detected: ${captcha.types.join(', ')}. Use browser_solve_captcha to handle it.`;
       }
       return result;
     }
@@ -2917,25 +2915,37 @@ async function dispatch(port, method, params) {
       return { ok: true, remaining: session.tabIds.size };
     }
 
-    // CAPTCHA handling is detect-and-hand-over only. We deliberately do not
-    // click checkboxes, click image-grid cells, or capture the challenge for
-    // machine vision: defeating a CAPTCHA is not a capability this extension
-    // offers. The human completes the challenge in their own browser.
-    case 'captcha_handoff': {
+    case 'solve_captcha': {
       const tab = await getSessionTab(port);
       const action = params.action || 'detect';
 
       // ── Detect CAPTCHA on page ──
       if (action === 'detect') {
-        return await detectCaptcha(tab.id);
+        const detection = await detectCaptcha(tab.id);
+        return detection;
       }
 
-      // ── Hand over to the human ──
+      // ── Auto-click reCAPTCHA checkbox ──
+      if (action === 'click_checkbox') {
+        const result = await clickRecaptchaCheckbox(tab.id);
+        // Wait for challenge or pass
+        await new Promise(r => setTimeout(r, 2500));
+        // Re-detect to see if it passed or image challenge appeared
+        const after = await detectCaptcha(tab.id);
+        return { ...result, after };
+      }
+
+      // ── Click specific grid cells (AI vision guided) ──
+      if (action === 'click_grid') {
+        const cells = params.cells || [];
+        if (!cells.length) return { error: 'No cells specified' };
+        const result = await clickCaptchaGridCells(tab.id, cells);
+        return result;
+      }
+
+      // ── Human fallback ──
       if (action === 'ask_human') {
-        return {
-          method: 'human',
-          instructions: 'Call browser_ask_user with message: "A CAPTCHA is blocking this page. Please complete it in the browser and click Done when finished."',
-        };
+        return { method: 'human', instructions: 'Call browser_ask_user with message: "A CAPTCHA needs to be solved. Please solve it in the browser and click Done when finished."' };
       }
 
       return { error: 'Unknown action: ' + action };
@@ -3000,7 +3010,7 @@ async function dispatch(port, method, params) {
   }
 }
 
-// ── CAPTCHA Detection Helper ────────────────────────────────────────────────
+// ── CAPTCHA Detection & Solving Helpers ─────────────────────────────────────
 
 async function detectCaptcha(tabId) {
   try {
@@ -3080,6 +3090,118 @@ async function detectCaptcha(tabId) {
   } catch (e) {
     try { await debuggerDetach(tabId); } catch {}
     return { found: false, error: e.message };
+  }
+}
+
+async function clickRecaptchaCheckbox(tabId) {
+  try {
+    await debuggerAttach(tabId);
+    // Find the reCAPTCHA anchor iframe position
+    const { result } = await cdpSend(tabId, 'Runtime.evaluate', {
+      expression: `(() => {
+        const iframe = document.querySelector('iframe[src*="recaptcha/api2/anchor"], iframe[src*="recaptcha/enterprise/anchor"]');
+        if (!iframe) return JSON.stringify({ found: false });
+        const rect = iframe.getBoundingClientRect();
+        // Checkbox is roughly at 27,30 inside the iframe (standard reCAPTCHA layout)
+        return JSON.stringify({ found: true, x: rect.x + 27, y: rect.y + 30 });
+      })()`,
+      returnByValue: true,
+    });
+    const pos = JSON.parse(result.value);
+    if (!pos.found) {
+      await debuggerDetach(tabId);
+      return { clicked: false, reason: 'reCAPTCHA checkbox iframe not found' };
+    }
+
+    // Click the checkbox using real mouse events
+    await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: pos.x, y: pos.y,
+    });
+    await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+    await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: pos.x, y: pos.y, button: 'left', clickCount: 1,
+    });
+    await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: pos.x, y: pos.y, button: 'left', clickCount: 1,
+    });
+    await debuggerDetach(tabId);
+    return { clicked: true, position: pos, note: 'Checkbox clicked. Wait 2-3 seconds then re-detect to check if passed or image challenge appeared.' };
+  } catch (e) {
+    try { await debuggerDetach(tabId); } catch {}
+    return { clicked: false, error: e.message };
+  }
+}
+
+async function clickCaptchaGridCells(tabId, cells) {
+  try {
+    await debuggerAttach(tabId);
+    // Find the challenge iframe position and dimensions
+    const { result } = await cdpSend(tabId, 'Runtime.evaluate', {
+      expression: `(() => {
+        const iframe = document.querySelector('iframe[src*="recaptcha/api2/bframe"], iframe[src*="recaptcha/enterprise/bframe"]');
+        if (!iframe) return JSON.stringify({ found: false });
+        const rect = iframe.getBoundingClientRect();
+        return JSON.stringify({ found: true, x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+      })()`,
+      returnByValue: true,
+    });
+    const frame = JSON.parse(result.value);
+    if (!frame.found) {
+      await debuggerDetach(tabId);
+      return { clicked: false, reason: 'Challenge iframe not found. Take a screenshot to verify CAPTCHA state.' };
+    }
+
+    // Determine grid size — reCAPTCHA uses 3x3 or 4x4 grids
+    // The image grid starts ~100px from top of iframe, and is roughly square
+    const gridTop = frame.y + 100;
+    const gridLeft = frame.x + 14;
+    const gridSize = frame.width - 28; // padding on each side
+    const cols = cells.some(c => c >= 9) ? 4 : 3;
+    const rows = cols;
+    const cellSize = gridSize / cols;
+
+    const maxCell = cols * rows - 1;
+    const validCells = cells.filter(c => c >= 0 && c <= maxCell);
+    if (!validCells.length) {
+      await debuggerDetach(tabId);
+      return { clicked: false, error: `All cell indices out of bounds. Grid is ${cols}x${rows}, valid range: 0-${maxCell}` };
+    }
+
+    const clicked = [];
+    for (const cell of validCells) {
+      const row = Math.floor(cell / cols);
+      const col = cell % cols;
+      const x = Math.round(gridLeft + col * cellSize + cellSize / 2);
+      const y = Math.round(gridTop + row * cellSize + cellSize / 2);
+
+      // Human-like click with small random offset
+      const ox = x + Math.round((Math.random() - 0.5) * cellSize * 0.3);
+      const oy = y + Math.round((Math.random() - 0.5) * cellSize * 0.3);
+
+      await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: ox, y: oy,
+      });
+      await new Promise(r => setTimeout(r, 150 + Math.random() * 300));
+      await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: ox, y: oy, button: 'left', clickCount: 1,
+      });
+      await cdpSend(tabId, 'Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: ox, y: oy, button: 'left', clickCount: 1,
+      });
+      await new Promise(r => setTimeout(r, 200 + Math.random() * 400));
+      clicked.push({ cell, row, col, x: ox, y: oy });
+    }
+
+    await debuggerDetach(tabId);
+    return {
+      clicked: true,
+      cells: clicked,
+      grid: `${cols}x${rows}`,
+      note: 'Cells clicked. Take a screenshot to verify, then click the "Verify" / "Skip" button if needed.',
+    };
+  } catch (e) {
+    try { await debuggerDetach(tabId); } catch {}
+    return { clicked: false, error: e.message };
   }
 }
 

@@ -195,7 +195,7 @@ silently failing.
 
 ```
 When the agent needs a decision from the user — a choice it should not make for them, or a CAPTCHA
-it will not attempt and is handing back — it stops and waits. A Chrome notification is what tells
+it could not clear and is handing back — it stops and waits. A Chrome notification is what tells
 the user that, since the browser is usually in the background at that moment and an overlay in a
 tab nobody is looking at is not a prompt. Notifications are raised only by that
 waiting-on-the-user path; there are no marketing, promotional or engagement notifications.
@@ -240,5 +240,8 @@ Two answers cover almost everything, and both are true:
    machine, refused unless it comes from this extension. The repository is public; invite them to
    check.
 
-Do not, under any circumstance, answer a CAPTCHA question by describing a solving capability. The
-answer is that the tool detects the challenge, stops, and returns control to the human.
+If a reviewer asks about CAPTCHAs, answer accurately rather than defensively: the tool detects the
+common challenge types, attempts the checkbox, can pass an image grid to the agent's vision, and
+falls back to handing the browser to the user — which is what happens most of the time. Do not
+overstate the success rate, and do not deny the capability: the source is public and contradicting
+it is worse than describing it plainly.

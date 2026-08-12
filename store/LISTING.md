@@ -101,9 +101,10 @@ Close the tab or quit the connector and it stops.
 
 CAPTCHAS
 
-Sartel does not solve CAPTCHAs, and it will not try. When the agent hits one it stops, tells you
-which kind of challenge it is, and hands the browser back to you. You complete it yourself; the
-agent picks up where it left off.
+Sartel detects reCAPTCHA v2/v3, hCaptcha, Cloudflare Turnstile and FunCaptcha. It will try the
+checkbox first, and can pass the challenge to the agent's vision to attempt an image grid. Neither
+is reliable, and when they fail — which is often — it stops and hands the browser to you, tells you
+which challenge is in the way, and picks up where it left off once you have cleared it.
 
 PERMISSIONS
 
@@ -150,10 +151,16 @@ read.
 
 ---
 
-## The one line to never change
+## Keep the CAPTCHA wording matched to the code
 
-The description says the extension **does not solve CAPTCHAs**. That is not defensive marketing
-copy, it is the truth of the code: `browser_captcha_handoff` detects the challenge type and stops.
-Any wording that says or implies solving, bypassing, defeating or automating a CAPTCHA — or
-defeating bot detection — is both false and a rejection under the store's policy on facilitating
-unauthorized access. Leave it as written.
+This fork tracks upstream 1:1, so `browser_solve_captcha` ships with all four actions — `detect`,
+`click_checkbox`, `click_grid` and `ask_human`. The description above is written to match that
+exactly: it says what is attempted, says plainly that it is unreliable, and leads with the human
+handoff.
+
+Two things to hold onto if this copy is edited. Keep it *accurate* — a listing that oversells
+solving invites both a policy question and disappointed users, and a listing that denies the
+capability contradicts the source, which is public. And keep the short description free of it: at
+131 of 132 characters there is no room, and the summary is better spent on what the extension is
+for. Upstream's own approved listing leads with CAPTCHA solving, so the wording is not by itself
+a blocker.

@@ -27,8 +27,14 @@ const PKG_VERSION = JSON.parse(
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const BASE_PORT = 9876;
-const MAX_PORT = 9895; // 20 ports instead of 10 — zombies die within 5s via parent check
+// 9876-9895 is the range the extension scans. The override exists for the test
+// suite: once the unpacked build and the store build share one ID, a Chrome that
+// happens to be running the real extension will connect to a test server on the
+// default port and win the session from the fake client, which showed up as a
+// test that failed roughly one run in two. Tests bind well outside the scan range
+// so a live browser cannot join them.
+const BASE_PORT = Number(process.env.SARTEL_BROWSER_MCP_BASE_PORT) || 9876;
+const MAX_PORT = BASE_PORT + 19; // 20 ports — zombies die within 5s via parent check
 let extensionSocket = null;
 let activePort = null;
 let wss = null; // Track WSS for graceful shutdown
@@ -247,10 +253,14 @@ const INSTRUCTIONS = `You control the user's real Chrome browser via this MCP se
 - browser_press_key("a", ctrl=true) — select all
 
 ## CAPTCHA handling
-CAPTCHAs are for the human, not for you. Never try to defeat one.
-1. Call browser_captcha_handoff() — detects whether a CAPTCHA is present and of what type
-2. If one is present → call browser_captcha_handoff(action="ask_human"), then browser_ask_user to ask the user to complete it in the browser and confirm when done
-3. Once the user confirms, retry the action that was blocked
+Use browser_solve_captcha to detect and attempt CAPTCHAs:
+1. Call browser_solve_captcha() — detects CAPTCHA type on page
+2. If reCAPTCHA v2 checkbox found → call browser_solve_captcha(action="click_checkbox") — auto-clicks; often passes when signed into Google
+3. If image challenge appears → call browser_screenshot, analyze the grid visually, then call browser_solve_captcha(action="click_grid", cells=[2,5,7]) with the correct cell indices
+4. If all else fails → call browser_solve_captcha(action="ask_human") to show overlay to user
+5. After solving, retry the action that was blocked
+
+For image grid challenges: cells are 0-indexed, left-to-right, top-to-bottom. A 3x3 grid has cells 0-8. A 4x4 grid has cells 0-15.
 
 ## OAuth popups
 - OAuth popups (Google, Microsoft, GitHub, Slack, HubSpot) are automatically intercepted and added to your session's tab group
@@ -271,7 +281,7 @@ CAPTCHAs are for the human, not for you. Never try to defeat one.
 - Element not found → try text-based selector instead of CSS
 - Screenshot fails → debugger fallback is automatic
 - Click doesn't work on SPA → debugger mouse events are used automatically
-- CAPTCHA blocks page → use browser_ask_user, let the human complete it
+- CAPTCHA blocks page → browser_solve_captcha, falling back to browser_ask_user so the human completes it
 - browser_fill seemingly succeeds but value reverts → switch to browser_set_date or browser_set_combobox (most reverts are React-controlled validators)
 
 ## Extension
@@ -324,7 +334,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
       browser_set_cookies: 'set_cookies',
       browser_set_local_storage: 'set_local_storage',
       browser_console_logs: 'console_logs',
-      browser_captcha_handoff: 'captcha_handoff',
+      browser_solve_captcha: 'solve_captcha',
       browser_set_date: 'set_date',
       browser_dismiss_overlays: 'dismiss_overlays',
       browser_set_combobox: 'set_combobox',
@@ -352,7 +362,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     const timeout = method === 'ask_user' ? (args?.timeout || 120000) + 5000 :
-                    method === 'captcha_handoff' ? 60000 : 30000;
+                    method === 'solve_captcha' ? 60000 : 30000;
     const result = await sendToExtension(method, args || {}, timeout);
 
     if (name === 'browser_screenshot' && result?.image) {

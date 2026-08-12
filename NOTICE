@@ -21,10 +21,9 @@ Changes made in this fork:
     accepting any local connection.
   * The extension pins a public key in its manifest so its ID is fixed and
     known ahead of publication.
-  * `browser_solve_captcha` was replaced by `browser_captcha_handoff`. The
-    CAPTCHA checkbox auto-click, image-grid clicking, and vision-assisted
-    solving paths were removed. What remains detects a CAPTCHA and hands it
-    to the human.
+  * The startup self-update (`git pull` + `npm install` on every server start)
+    and a heartbeat leak on the port-retry path were removed; the connect
+    budget for the extension was raised from 7.5s to 22.5s.
   * The git-pull self-update on server startup, the extension-copying
     `install` CLI subcommand, and upstream's bundled copy of the extension
     inside the npm package were removed; the extension is distributed through

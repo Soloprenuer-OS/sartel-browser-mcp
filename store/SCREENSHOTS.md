@@ -79,9 +79,10 @@ it — a choice the agent should not make alone ("Which of these two addresses s
 the CAPTCHA hand-off ("A CAPTCHA is blocking this page. Complete it and I'll continue."). The
 Chrome notification for the same prompt visible in the corner if you can catch both in one frame.
 
-**What it must demonstrate:** the human is in the loop and the agent stops rather than pushing
-through. If you use the CAPTCHA variant, the wording on screen must be a hand-off — it stops and
-asks you to complete the challenge. It must not read as the agent solving or getting past one.
+**What it must demonstrate:** the human is in the loop and the agent stops rather than guessing.
+The shipped shot uses a cookie-approval prompt, which makes the point without raising a separate
+question in the reviewer's mind. A CAPTCHA hand-off works too, but keep the wording to what is on
+screen — the agent asking you to clear a challenge.
 
 **Suggested caption:** "It stops and asks instead of guessing."
 
@@ -105,6 +106,7 @@ list, and showing the actual bound socket is worth more than any wording.
 
 - [ ] All five are exactly 1280×800 (`sips -g pixelWidth -g pixelHeight *.png`).
 - [ ] No real personal data, no third-party account you do not own, no customer information.
-- [ ] No screenshot shows or implies solving a CAPTCHA or defeating a bot check.
+- [ ] No screenshot shows a CAPTCHA mid-solve. The hand-off is fine to show; a half-completed
+      challenge is a distraction that invites a question the image cannot answer.
 - [ ] No UI in any shot that the shipped extension does not actually have.
 - [ ] Consistent theme and window chrome across all five.

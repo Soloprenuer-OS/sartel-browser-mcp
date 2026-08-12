@@ -27,9 +27,12 @@ const OUR_ORIGIN = `chrome-extension://${PUBLISHED_EXTENSION_ID}`;
 const STORE_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; // stands in for a CWS-assigned ID
 
 /** Spawn the MCP server and resolve once it reports the port it bound. */
+// Bind outside 9876-9895 so a real extension running in a real Chrome cannot
+// connect to the server under test and steal the session from the fake client.
+let nextTestPort = 19876;
 function startServer(env = {}) {
   const child = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, ...env },
+    env: { SARTEL_BROWSER_MCP_BASE_PORT: String((nextTestPort += 20)), ...process.env, ...env },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stderr.setEncoding('utf8');
@@ -108,9 +111,6 @@ test('manifest description fits the Chrome Web Store limit', () => {
     manifest.description.length <= 132,
     `description is ${manifest.description.length} chars; the store caps it at 132`,
   );
-  // The listing and the manifest are read side by side by a reviewer, and a
-  // CAPTCHA-solving claim is both untrue of this build and a rejection risk.
-  assert.ok(!/captcha/i.test(manifest.description), 'no CAPTCHA claim in the manifest description');
 });
 
 test('origin gate', async (t) => {
@@ -249,8 +249,8 @@ test('stdio → WS → response round trip', async (t) => {
 
   const list = await rpc(2, 'tools/list', {});
   const names = list.result.tools.map((tool) => tool.name);
-  assert.ok(names.includes('browser_captcha_handoff'), 'captcha handoff tool is exposed');
-  assert.ok(!names.includes('browser_solve_captcha'), 'no CAPTCHA-solving tool is exposed');
+  assert.ok(names.includes('browser_solve_captcha'), 'the upstream CAPTCHA tool is exposed');
+  assert.equal(names.length, 41, 'the full upstream tool surface is exposed');
 
   const called = await rpc(3, 'tools/call', {
     name: 'browser_navigate',
@@ -329,11 +329,18 @@ test('a tool call issued before the extension connects still succeeds', async (t
   assert.deepEqual(JSON.parse(called.result.content[0].text), { ok: true, url: 'https://example.com' });
 });
 
-test('browser_captcha_handoff offers no solving actions', async () => {
+// This fork tracks upstream's tool surface exactly. The check is here so a
+// partial restore — schema back but handler missing, or vice versa — fails
+// loudly instead of erroring only at the moment a user hits a CAPTCHA.
+test('browser_solve_captcha matches upstream, schema and handler', async () => {
   const { TOOLS } = await import(join(here, '..', 'tools.js'));
-  const tool = TOOLS.find((entry) => entry.name === 'browser_captcha_handoff');
+  const tool = TOOLS.find((entry) => entry.name === 'browser_solve_captcha');
   assert.ok(tool, 'tool exists');
-  assert.deepEqual(tool.inputSchema.properties.action.enum, ['detect', 'ask_human']);
-  assert.equal(tool.inputSchema.properties.cells, undefined);
-  assert.ok(!/solve/i.test(tool.description) || /does not attempt to solve/i.test(tool.description));
+  assert.deepEqual(tool.inputSchema.properties.action.enum, ['detect', 'click_checkbox', 'click_grid', 'ask_human']);
+  assert.ok(tool.inputSchema.properties.cells, 'grid cells parameter is present');
+
+  const background = readFileSync(join(repoRoot, 'extension', 'background.js'), 'utf8');
+  for (const symbol of ["case 'solve_captcha'", 'clickRecaptchaCheckbox', 'clickCaptchaGridCells']) {
+    assert.ok(background.includes(symbol), `background.js still implements ${symbol}`);
+  }
 });

@@ -14,19 +14,16 @@ MIT licensed, © 2026 Agent360. The extension and the MCP server are substantial
 The MIT licence is carried over verbatim in [`LICENSE`](LICENSE), and [`NOTICE`](NOTICE) records
 the attribution together with the full list of changes made here.
 
-The three changes worth knowing about:
+The tool surface tracks upstream 1:1 — all 41 tools, unchanged behaviour. The changes worth
+knowing about are around it:
 
-1. **Rebrand** to Sartel, with a pinned extension key.
+1. **Rebrand** to Sartel, with the Chrome Web Store key pinned in the manifest.
 2. **An origin gate on the WebSocket** (see below). Upstream accepts any local handshake.
-3. **No CAPTCHA solving.** `browser_solve_captcha` became `browser_captcha_handoff`.
-
-## No CAPTCHA solving
-
-`browser_captcha_handoff` detects that a CAPTCHA is present, reports which kind it is, and stops.
-The user completes the challenge themselves in their own browser, and the agent retries the
-blocked action afterwards. The upstream checkbox auto-click, image-grid clicking, and
-vision-assisted solving paths were removed. This tool does not bypass, defeat, or automate a
-CAPTCHA, and nothing in this project claims otherwise.
+3. **No self-update on startup.** Upstream ran `git pull` and `npm install` every time the server
+   started, which is wrong under `npx` delivery and mutates a working tree that may not be ours.
+4. **A longer connect budget.** Upstream waited 7.5s for the extension; a server spawned per
+   session routinely meets an extension whose offscreen document has to be recreated first, which
+   measured ~9s. See the comment in `mcp-server/index.js`.
 
 ## Security
 

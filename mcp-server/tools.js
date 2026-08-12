@@ -458,12 +458,17 @@ export const TOOLS = [
     },
   },
   {
-    name: 'browser_captcha_handoff',
-    description: 'Detect a CAPTCHA on the current page and hand it to the human. Recognises reCAPTCHA v2/v3, hCaptcha, Cloudflare Turnstile and FunCaptcha, reports which one is present, and stops there. It does not attempt to solve, click through, or otherwise defeat a CAPTCHA — the user completes the challenge themselves in their browser. Follow "ask_human" with browser_ask_user, then retry the blocked action once the user confirms.',
+    name: 'browser_solve_captcha',
+    description: 'Detect and solve CAPTCHAs on the current page. Auto-detects reCAPTCHA v2/v3, hCaptcha, Cloudflare Turnstile, and FunCaptcha. Tries auto-click first (often clears reCAPTCHA v2 when signed into Google), then returns a screenshot for AI vision analysis, then falls back to asking the user. Returns detection info and solving status.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['detect', 'ask_human'], description: 'Action to take. "detect" scans the page and reports what kind of CAPTCHA is present. "ask_human" returns instructions for handing the challenge to the user. Default: "detect"' },
+        action: { type: 'string', enum: ['detect', 'click_checkbox', 'click_grid', 'ask_human'], description: 'Action to take. "detect" scans for CAPTCHAs. "click_checkbox" clicks the reCAPTCHA checkbox. "click_grid" clicks specific grid cells (pass cells param). "ask_human" shows overlay to user. Default: "detect"' },
+        cells: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Grid cell indices to click (0-indexed, left-to-right, top-to-bottom) for image challenges. E.g. [2, 5, 7] to click cells 3, 6, 8.',
+        },
       },
     },
   },
