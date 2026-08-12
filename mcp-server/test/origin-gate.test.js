@@ -230,6 +230,75 @@ test('stdio → WS → response round trip', async (t) => {
   assert.deepEqual(payload, { ok: true, url: 'https://example.com' });
 });
 
+// Regression guard, found by driving a real idle Chrome rather than a fake client.
+//
+// Upstream waited 5 × 1500ms = 7.5s for the extension. That is enough for a
+// long-lived server, which is how upstream is run. Ours is spawned per session by
+// the connector daemon, so a fresh server routinely meets an asleep extension: the
+// offscreen document only scans every 2s while it is alive, and reviving it after
+// the MV3 service worker has idled measured ~9s. The first browser tool call of the
+// session therefore failed. These two tests exist so that budget cannot quietly
+// shrink back below what a real Chrome needs.
+test('the connect budget clears the measured worst case', () => {
+  const source = readFileSync(serverPath, 'utf8');
+  const retries = Number(/CONNECT_RETRIES = (\d+)/.exec(source)?.[1]);
+  const delay = Number(/RETRY_DELAY_MS = (\d+)/.exec(source)?.[1]);
+  assert.ok(Number.isFinite(retries) && Number.isFinite(delay), 'budget constants are readable');
+  const windowMs = retries * delay;
+  assert.ok(windowMs >= 15000, `connect window ${windowMs}ms must clear the ~9s revival with margin`);
+  assert.ok(windowMs <= 40000, `connect window ${windowMs}ms would read as a hang`);
+});
+
+test('a tool call issued before the extension connects still succeeds', async (t) => {
+  const server = startServer();
+  const port = await server.ready;
+  t.after(() => server.child.kill('SIGKILL'));
+
+  const replies = new Map();
+  let buffer = '';
+  server.child.stdout.on('data', (chunk) => {
+    buffer += chunk;
+    let nl;
+    while ((nl = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      const msg = JSON.parse(line);
+      const waiter = replies.get(msg.id);
+      if (waiter) { replies.delete(msg.id); waiter(msg); }
+    }
+  });
+  const rpc = (id, method, params, timeoutMs = 30000) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`no reply to ${method}`)), timeoutMs);
+    replies.set(id, (msg) => { clearTimeout(timer); resolve(msg); });
+    server.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
+
+  await rpc(1, 'initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: {},
+    clientInfo: { name: 'late-connect-test', version: '0' },
+  });
+  server.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+
+  // Fire the call with NO extension attached, then connect 9s later — the delay
+  // that beat the old 7.5s budget.
+  const pending = rpc(2, 'tools/call', { name: 'browser_navigate', arguments: { url: 'https://example.com' } });
+
+  await new Promise((r) => setTimeout(r, 9000));
+  const { outcome, ws } = await handshake(port, OUR_ORIGIN);
+  assert.equal(outcome, 'open');
+  t.after(() => ws.close());
+  ws.on('message', (data) => {
+    const cmd = JSON.parse(data.toString());
+    if (cmd.method === 'navigate') ws.send(JSON.stringify({ id: cmd.id, result: { ok: true, url: cmd.params.url } }));
+  });
+
+  const called = await pending;
+  assert.ok(!called.result?.isError, 'the late connect is waited out, not failed');
+  assert.deepEqual(JSON.parse(called.result.content[0].text), { ok: true, url: 'https://example.com' });
+});
+
 test('browser_captcha_handoff offers no solving actions', async () => {
   const { TOOLS } = await import(join(here, '..', 'tools.js'));
   const tool = TOOLS.find((entry) => entry.name === 'browser_captcha_handoff');

@@ -163,14 +163,35 @@ createWSS();
 
 // ── Send command to extension ───────────────────────────────────────────────
 
-async function sendToExtension(method, params = {}, timeoutMs = 30000, _retries = 5) {
-  // Retry if extension is temporarily disconnected (reconnects every 2s)
+// How long the FIRST call waits for the extension to appear.
+//
+// Upstream used 5 × 1500ms = 7.5s, which is fine when the server is long-lived —
+// their users start it once from an MCP client config and it outlives every
+// reconnect. We are spawned per session by the connector daemon via `npx`, so a
+// brand-new server meets a possibly-asleep extension at the start of nearly every
+// chat that touches the browser.
+//
+// The extension's offscreen document scans for us every 2s, but only while it is
+// alive; once the MV3 service worker has gone idle the document must be recreated
+// first. Measured against a real idle Chrome, that round trip took ~9s — losing to
+// a 7.5s budget by a hair, and failing the first tool call of the session.
+//
+// 15 × 1500ms = 22.5s clears the measured worst case with real margin, while
+// staying far below anything that reads as a hang.
+export const CONNECT_RETRIES = 15;
+const RETRY_DELAY_MS = 1500;
+
+async function sendToExtension(method, params = {}, timeoutMs = 30000, _retries = CONNECT_RETRIES) {
   if (!extensionSocket || extensionSocket.readyState !== 1) {
     if (_retries > 0) {
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
       return sendToExtension(method, params, timeoutMs, _retries - 1);
     }
-    throw new Error('Chrome extension not connected after 5 retries. Open Chrome and ensure the Sartel extension is installed and enabled.');
+    // Name both halves — the missing one is usually Chrome, not the extension.
+    throw new Error(
+      `Chrome extension did not connect within ${Math.round((CONNECT_RETRIES * RETRY_DELAY_MS) / 1000)}s. ` +
+      'Check that Chrome is running, and that the Sartel extension is installed and enabled at chrome://extensions.',
+    );
   }
   return new Promise((resolve, reject) => {
     const id = ++cmdId;
