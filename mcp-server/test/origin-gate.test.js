@@ -83,6 +83,20 @@ test('the pinned manifest key and the server fallback name the same extension', 
   assert.ok(source.includes(DEV_EXTENSION_ID), 'server must fall back to the dev extension ID');
 });
 
+// The store rejects the whole upload over this, and it costs a full round trip to
+// find out: items.insert returned PKG_MANIFEST_SUMMARY_TOO_LONG at 145 characters,
+// after building, authenticating and uploading. Cheaper to fail here.
+test('manifest description fits the Chrome Web Store limit', () => {
+  const manifest = JSON.parse(readFileSync(join(repoRoot, 'extension', 'manifest.json'), 'utf8'));
+  assert.ok(
+    manifest.description.length <= 132,
+    `description is ${manifest.description.length} chars; the store caps it at 132`,
+  );
+  // The listing and the manifest are read side by side by a reviewer, and a
+  // CAPTCHA-solving claim is both untrue of this build and a rejection risk.
+  assert.ok(!/captcha/i.test(manifest.description), 'no CAPTCHA claim in the manifest description');
+});
+
 test('origin gate', async (t) => {
   const server = startServer();
   const port = await server.ready;
