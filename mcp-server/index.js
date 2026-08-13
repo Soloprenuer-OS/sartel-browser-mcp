@@ -291,10 +291,17 @@ You cannot navigate to chrome:// pages — the user must do that manually.
 ## Sharing wishes / use-cases / bugs
 Whenever the user (a) expresses a missing feature, (b) hits something that looks like a bug in Sartel Browser itself, or (c) describes something cool they built with it — call **browser_about** with the matching intent ("wish" / "use_case" / "bug") and a short title + body, then offer the returned submit_url to the user as a clickable link. Don't ask permission, just draft + offer the link.`;
 
+// `instructions` belongs in the OPTIONS object, not a third argument. The SDK's
+// signature is constructor(serverInfo, options?) — a third argument is accepted
+// by JavaScript and dropped on the floor, so upstream's INSTRUCTIONS have never
+// reached a single client. Nothing errors; initialize just returns no
+// instructions and the model works without the guidance the author wrote.
+//
+// Caught by asking the published package for its own initialize result rather
+// than trusting that a constant which is clearly defined is therefore delivered.
 const mcpServer = new Server(
   { name: 'sartel-browser', version: PKG_VERSION },
-  { capabilities: { tools: {} } },
-  { instructions: INSTRUCTIONS },
+  { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
 );
 
 mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({

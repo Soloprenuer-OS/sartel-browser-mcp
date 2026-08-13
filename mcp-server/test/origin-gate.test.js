@@ -102,6 +102,46 @@ test('the pinned manifest key derives the ID the server allowlists', () => {
   assert.ok(source.includes(PUBLISHED_EXTENSION_ID), 'server must allowlist the published ID');
 });
 
+// The server defines 5.5KB of usage guidance; upstream passed it as a third
+// constructor argument, which the SDK signature (serverInfo, options) drops
+// silently. Nothing errors — initialize simply returns none, and the model loses
+// the CAPTCHA, OAuth-popup and tab-group guidance the author wrote. Asserted
+// against the real initialize result, because the constant being defined proves
+// nothing about it being delivered.
+test('initialize actually returns the server instructions', async (t) => {
+  const server = startServer();
+  await server.ready;
+  t.after(() => server.child.kill('SIGKILL'));
+
+  const reply = await new Promise((resolve, reject) => {
+    let buffer = '';
+    const timer = setTimeout(() => reject(new Error('no initialize reply')), 10000);
+    server.child.stdout.on('data', (chunk) => {
+      buffer += chunk;
+      let nl;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        const msg = JSON.parse(line);
+        if (msg.id === 1) { clearTimeout(timer); resolve(msg); }
+      }
+    });
+    server.child.stdin.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+      }) + '\n',
+    );
+  });
+
+  assert.equal(typeof reply.result.instructions, 'string', 'instructions must be delivered');
+  assert.ok(reply.result.instructions.length > 1000, 'the whole block, not a stub');
+  assert.match(reply.result.instructions, /CAPTCHA/i);
+});
+
 // The store rejects the whole upload over this, and it costs a full round trip to
 // find out: items.insert returned PKG_MANIFEST_SUMMARY_TOO_LONG at 145 characters,
 // after building, authenticating and uploading. Cheaper to fail here.
