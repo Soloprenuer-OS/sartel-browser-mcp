@@ -250,6 +250,8 @@ test('stdio → WS → response round trip', async (t) => {
     const cmd = JSON.parse(data.toString());
     if (cmd.method === 'navigate') {
       ws.send(JSON.stringify({ id: cmd.id, result: { ok: true, url: cmd.params.url } }));
+    } else if (['start_network_capture', 'read_network', 'stop_network_capture'].includes(cmd.method)) {
+      ws.send(JSON.stringify({ id: cmd.id, result: { ok: true, method: cmd.method, params: cmd.params } }));
     }
   });
 
@@ -290,7 +292,7 @@ test('stdio → WS → response round trip', async (t) => {
   const list = await rpc(2, 'tools/list', {});
   const names = list.result.tools.map((tool) => tool.name);
   assert.ok(names.includes('browser_solve_captcha'), 'the upstream CAPTCHA tool is exposed');
-  assert.equal(names.length, 41, 'the full upstream tool surface is exposed');
+  assert.equal(names.length, 44, 'the upstream surface and three network capture tools are exposed');
 
   const called = await rpc(3, 'tools/call', {
     name: 'browser_navigate',
@@ -298,6 +300,15 @@ test('stdio → WS → response round trip', async (t) => {
   });
   const payload = JSON.parse(called.result.content[0].text);
   assert.deepEqual(payload, { ok: true, url: 'https://example.com' });
+
+  for (const [name, method, args] of [
+    ['browser_start_network_capture', 'start_network_capture', { tab_id: 10 }],
+    ['browser_read_network', 'read_network', { cursor: 3 }],
+    ['browser_stop_network_capture', 'stop_network_capture', {}],
+  ]) {
+    const response = await rpc(4 + names.indexOf(name), 'tools/call', { name, arguments: args });
+    assert.deepEqual(JSON.parse(response.result.content[0].text), { ok: true, method, params: args });
+  }
 });
 
 // Regression guard, found by driving a real idle Chrome rather than a fake client.
