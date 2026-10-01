@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Sartel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Let your local Sartel agent drive your own logged-in Chrome: navigate, click, fill forms, read pages, screenshot. All on 127.0.0.1.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlLHezZn7Na+AzRWEoGH9TDQtJBviy8EGbW/pqi3DvF6FCD3/tnwwlsWfQS1a5RZRaph88ViVFY1ky3oWUCZoIvVdvOyYS5QqD0hBlgZj49PNONhky4+fPI3xuyVwApD7NBPmOkF4SZtBCw/Wq/5/Cak10f1AntRFR+EX3F/C+jcLStGZssqKu3oQGch/Dv55Uss7A2V5HYHid2gPJBj9zmC0QgLJgGSeVXg45bnf3DzQI6zhAHDwnYdGQiReBzeZ9VFtfqghRgo7gegse0NnryPahbnaeKL+Jpp7lLqBzaozRg/hmeRdvw+sGn7dBpcZOQiQwGxq1h9RANoPcHVg8wIDAQAB",
   "permissions": [

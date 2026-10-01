@@ -496,6 +496,26 @@ export const TOOLS = [
   },
 ];
 
+// Page/action tools resolve this ID within the current session; omitting it
+// keeps the existing active-tab behavior for older clients.
+const TAB_TARGET_TOOLS = new Set([
+  'navigate', 'get_page_content', 'screenshot', 'execute_script', 'click', 'fill',
+  'set_date', 'dismiss_overlays', 'set_combobox', 'drop_file', 'wait', 'press_key',
+  'scroll', 'copy_to_clipboard', 'paste_from_clipboard', 'double_click',
+  'right_click', 'click_xy', 'reattach_debugger', 'hover', 'select_option',
+  'handle_dialog', 'wait_for_network', 'get_local_storage', 'set_local_storage',
+  'console_logs', 'ask_user', 'select_frame', 'list_frames', 'solve_captcha',
+  'upload_file',
+]);
+for (const tool of TOOLS) {
+  if (TAB_TARGET_TOOLS.has(tool.name.slice('browser_'.length))) {
+    tool.inputSchema.properties.tab_id = {
+      type: 'number',
+      description: 'Optional tab ID from browser_list_tabs; must belong to this browser session.',
+    };
+  }
+}
+
 // Known provider token pages for browser_extract_token
 export const PROVIDER_PAGES = {
   stripe: {

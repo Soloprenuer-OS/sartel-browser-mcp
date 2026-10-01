@@ -162,9 +162,23 @@ function persistSessions() {
 // Get the active tab for this session (last navigated), or create one.
 // activate=false (default): runs in background — no focus stealing.
 // activate=true: only for commands that NEED visible tab (screenshot, ask_user, navigate, execute_script).
-async function getSessionTab(port, activate = false) {
+async function getSessionTab(port, activate = false, requestedTabId) {
   const session = getSession(port);
   let target = null;
+  if (requestedTabId !== undefined) {
+    if (!Number.isInteger(requestedTabId) || requestedTabId < 1 || !session.tabIds.has(requestedTabId)) {
+      throw new Error(`Tab ${requestedTabId} does not belong to this session`);
+    }
+    try {
+      target = await chrome.tabs.get(requestedTabId);
+    } catch {
+      session.tabIds.delete(requestedTabId);
+      if (session.activeTabId === requestedTabId) session.activeTabId = null;
+      persistSessions();
+      throw new Error(`Tab ${requestedTabId} is closed or stale`);
+    }
+    if (target.url?.startsWith('chrome://')) throw new Error(`Tab ${requestedTabId} is not controllable`);
+  }
   // Remember our OWN about:blank placeholder so we reuse it instead of spawning another
   // on every read-only call before the first navigate (FIX-4: about:blank proliferation).
   let blankFallback = null;
@@ -176,7 +190,7 @@ async function getSessionTab(port, activate = false) {
   };
 
   // Prefer the active (last navigated) tab
-  if (session.activeTabId) {
+  if (!target && session.activeTabId) {
     try {
       const tab = await chrome.tabs.get(session.activeTabId);
       if (consider(tab)) target = tab;
@@ -188,7 +202,7 @@ async function getSessionTab(port, activate = false) {
   }
 
   // Fallback: any usable session tab
-  if (!target) {
+  if (!target && requestedTabId === undefined) {
     for (const tabId of session.tabIds) {
       try {
         const tab = await chrome.tabs.get(tabId);
@@ -200,7 +214,7 @@ async function getSessionTab(port, activate = false) {
   }
 
   // Reuse our own blank placeholder rather than spawning yet another one (FIX-4).
-  if (!target && blankFallback) {
+  if (!target && requestedTabId === undefined && blankFallback) {
     target = blankFallback;
     session.activeTabId = target.id;
     persistSessions();
@@ -208,7 +222,7 @@ async function getSessionTab(port, activate = false) {
 
   // No usable tab at all — create ONE placeholder and pin it as the active tab so the
   // NEXT call reuses it (FIX-4) instead of creating a fresh about:blank every time.
-  if (!target) {
+  if (!target && requestedTabId === undefined) {
     target = await chrome.tabs.create({ url: 'about:blank', active: false });
     await addTabToSession(port, target.id);
     session.activeTabId = target.id;
@@ -1774,7 +1788,7 @@ async function dispatch(port, method, params) {
   switch (method) {
     case 'navigate': {
       const session = getSession(port);
-      let tab = await getSessionTab(port);
+      let tab = await getSessionTab(port, false, params.tab_id);
 
       // Always reuse the active tab — navigate in place, don't create new tabs
       // Only create new tab if explicitly requested via new_tab param
@@ -1813,7 +1827,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'get_page_content': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot access chrome:// pages');
       const format = params.format || 'text';
       const scriptResult = await safeExecuteScript(tab.id, (fmt) => fmt === 'html' ? document.documentElement.outerHTML : document.body.innerText, [format]);
@@ -1829,7 +1843,7 @@ async function dispatch(port, method, params) {
       // getSessionTab(…, true) is focus-NEUTRAL now: it un-minimizes + activates the tab
       // but does NOT steal window focus (FIX-1). Screenshots run constantly, so the common
       // path must never yank Chrome to the foreground.
-      const tab = await getSessionTab(port, true);
+      const tab = await getSessionTab(port, true, params.tab_id);
       if (tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) {
         throw new Error(`Cannot screenshot ${tab.url.split(':')[0]}: pages — navigate to a real page first`);
       }
@@ -1893,7 +1907,7 @@ async function dispatch(port, method, params) {
       if (typeof params.code !== 'string' || !params.code.trim()) {
         return { ok: false, error: 'Missing code. Pass a JavaScript EXPRESSION in `code` (e.g. an IIFE: (() => {...; return x;})()). `return ...` at top level is invalid — the handler wraps code in parentheses.' };
       }
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot execute scripts on chrome:// pages');
 
       const diag = { tried: [] };
@@ -1999,7 +2013,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'click': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
 
       // Wrap full click flow (incl. resolveElement) so debugger failures in EITHER
@@ -2040,7 +2054,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'fill': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const parsed = parseSelector(params.selector);
 
@@ -2079,7 +2093,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'set_date': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(params.date)) {
         return { ok: false, error: 'date must be ISO format YYYY-MM-DD, got: ' + params.date };
@@ -2152,7 +2166,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'dismiss_overlays': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const scope = params.scope || 'non_critical';
       const maxPasses = params.max_passes ?? 3;
@@ -2161,7 +2175,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'set_combobox': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       if (!params.selector) return { ok: false, error: 'selector required' };
       if (!params.values && !params.value) return { ok: false, error: 'value or values required' };
@@ -2175,7 +2189,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'drop_file': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const files = Array.isArray(params.files) ? params.files : [params.files || params.file];
       if (!files[0]) return { ok: false, error: 'files or file required' };
@@ -2183,7 +2197,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'wait': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const timeout = params.timeout || 10000;
       const sel = params.selector;
@@ -2209,7 +2223,7 @@ async function dispatch(port, method, params) {
 
     case 'press_key': {
       // v1.22: activate tab so key-event lands in foreground (otherwise Chrome routes to active tab)
-      const tab = await getSessionTab(port, true);
+      const tab = await getSessionTab(port, true, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const key = params.key; // e.g. "Enter", "Tab", "Escape", "ArrowDown"
       const modifiers = (params.ctrl ? 2 : 0) | (params.alt ? 1 : 0) | (params.shift ? 8 : 0) | (params.meta ? 4 : 0);
@@ -2252,7 +2266,7 @@ async function dispatch(port, method, params) {
     case 'scroll': {
       // v1.22: NO activate — CDP Input.dispatchMouseEvent goes via debugger directly to target,
       // doesn't need active tab. Re-activating on every scroll-call destabilizes debugger.
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       // Scroll to element
       if (params.selector) {
@@ -2295,7 +2309,7 @@ async function dispatch(port, method, params) {
     // field without the value ever entering the LLM context or transcript.
 
     case 'copy_to_clipboard': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const parsed = parseSelector(params.selector);
       if (parsed.type === 'text') {
@@ -2320,7 +2334,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'paste_from_clipboard': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const clip = await chrome.runtime.sendMessage({ type: 'bmcp_clipboard', op: 'read' });
       if (!clip?.ok) return { ok: false, error: 'clipboard read failed: ' + (clip?.error || 'unknown') };
@@ -2357,7 +2371,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'double_click': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const el = await resolveElement(tab.id, params.selector);
       if (!el) return { ok: false, error: 'Element not found: ' + params.selector };
@@ -2375,7 +2389,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'right_click': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const el = await resolveElement(tab.id, params.selector);
       if (!el) return { ok: false, error: 'Element not found: ' + params.selector };
@@ -2392,7 +2406,7 @@ async function dispatch(port, method, params) {
       // Raw coordinate click — the escape hatch for custom widgets whose buttons
       // resist every selector strategy (Azure portal dialogs, KO-bound divs).
       // Coordinates come from the caller's own screenshot analysis.
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       if (typeof params.x !== 'number' || typeof params.y !== 'number') {
         return { ok: false, error: 'x and y (numbers, CSS pixels in viewport) are required' };
@@ -2403,7 +2417,7 @@ async function dispatch(port, method, params) {
 
     case 'reattach_debugger': {
       // Ghost-attach recovery without full extension reload: force detach + fresh attach.
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       try { await chrome.debugger.detach({ tabId: tab.id }); } catch {}
       await new Promise(r => setTimeout(r, 150));
       await debuggerAttach(tab.id);
@@ -2411,7 +2425,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'hover': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const el = await resolveElement(tab.id, params.selector);
       if (!el) return { ok: false, error: 'Element not found: ' + params.selector };
@@ -2429,7 +2443,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'select_option': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
 
       // Strategy: handle native <select> and custom dropdowns differently
@@ -2477,7 +2491,7 @@ async function dispatch(port, method, params) {
     case 'handle_dialog': {
       // Auto-handle JS alert/confirm/prompt dialogs
       // Must be set up BEFORE the dialog appears
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const action = params.action || 'accept'; // accept, dismiss
       const promptText = params.text || '';
@@ -2521,7 +2535,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'wait_for_network': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const urlPattern = params.url_pattern || '';
       const timeout = params.timeout || 15000;
@@ -2618,7 +2632,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'get_local_storage': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot access chrome:// pages');
       const scriptResult = await safeExecuteScript(tab.id, (key) => key ? localStorage.getItem(key) : JSON.stringify(Object.fromEntries(Object.entries(localStorage))), [params.key || null]);
       if (!scriptResult.cspBlocked) {
@@ -2655,7 +2669,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'set_local_storage': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot access chrome:// pages');
       const key = params.key;
       const val = params.value;
@@ -2669,7 +2683,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'console_logs': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       const count = params.count || 50;
       try {
         await debuggerAttach(tab.id);
@@ -2715,7 +2729,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'ask_user': {
-      const tab = await getSessionTab(port, true);
+      const tab = await getSessionTab(port, true, params.tab_id);
       const timeout = params.timeout || 120000;
       const fields = params.fields || [];
       const hasFields = fields.length > 0;
@@ -2856,7 +2870,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'select_frame': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot access chrome:// pages');
       const frameIndex = params.frame_index ?? 0;
       const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
@@ -2874,7 +2888,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'list_frames': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
       return { frames: frames?.map((f, i) => ({ index: i, url: f.url, frame_id: f.frameId, parent_frame_id: f.parentFrameId })) || [] };
     }
@@ -2883,6 +2897,10 @@ async function dispatch(port, method, params) {
       if (!lastCreatedTabId) return { error: 'No new tab detected' };
       try {
         const tab = await chrome.tabs.get(lastCreatedTabId);
+        const session = getSession(port);
+        if (!session.tabIds.has(tab.id) && !session.tabIds.has(tab.openerTabId)) {
+          return { error: 'No new tab belongs to this session' };
+        }
         // Claim the new tab for this session
         await addTabToSession(port, tab.id);
         return { id: tab.id, url: tab.url, title: tab.title };
@@ -2916,7 +2934,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'solve_captcha': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       const action = params.action || 'detect';
 
       // ── Detect CAPTCHA on page ──
@@ -2952,7 +2970,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'upload_file': {
-      const tab = await getSessionTab(port);
+      const tab = await getSessionTab(port, false, params.tab_id);
       const selector = params.selector || 'input[type="file"]';
       try {
         await debuggerAttach(tab.id);
