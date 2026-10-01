@@ -129,6 +129,7 @@ async function addTabToSession(port, tabId) {
 }
 
 async function releaseSession(port) {
+  cancelDialogsForPort(port);
   const session = sessions.get(port);
   if (!session) return;
 
@@ -331,6 +332,7 @@ function debuggerForceDetach(tabId) {
 // Sync local Set when Chrome auto-detaches (navigation, idle, devtools opened, etc.)
 chrome.debugger.onDetach.addListener((source, reason) => {
   if (source.tabId) {
+    cancelDialogForTab(source.tabId, false);
     debuggerAttached.delete(source.tabId);
     if (reason && reason !== 'target_closed') {
       console.log(`[MCP] Debugger auto-detached from tab ${source.tabId} (reason: ${reason})`);
@@ -399,6 +401,7 @@ async function cdpSend(tabId, method, params = {}) {
 
 // Clean up debugger + session refs when tabs close
 chrome.tabs.onRemoved.addListener((tabId) => {
+  cancelDialogForTab(tabId);
   debuggerAttached.delete(tabId);
   for (const [port, session] of sessions) {
     if (!session.tabIds.has(tabId)) continue;
@@ -1782,6 +1785,44 @@ async function dropFileOnTarget(tabId, selector, files) {
   };
 }
 
+// ── JavaScript Dialog Lease ──────────────────────────────────────────────────
+
+const dialogArms = new Map(); // session port → one bounded listener/result
+
+function cancelDialogsForPort(port) {
+  const arm = dialogArms.get(port);
+  if (!arm) return false;
+  clearTimeout(arm.timer);
+  chrome.debugger.onEvent.removeListener(arm.listener);
+  dialogArms.delete(port);
+  return true;
+}
+
+function cancelDialogForTab(tabId, includeHandling = true) {
+  for (const [port, arm] of dialogArms) {
+    if (arm.tabId === tabId && (includeHandling || arm.status === 'armed')) cancelDialogsForPort(port);
+  }
+}
+
+function armDialog(port, tabId, action, promptText, timeout) {
+  if (dialogArms.has(port)) return { ok: false, error: 'A dialog is already armed for this session; read or cancel it first' };
+  if ([...dialogArms.values()].some(arm => arm.tabId === tabId)) return { ok: false, error: 'A dialog is already armed for this tab' };
+  const expiresAt = Date.now() + timeout;
+  const arm = { tabId, expiresAt, status: 'armed', result: null, listener: null, timer: null };
+  arm.listener = (source, method, eventParams) => {
+    if (source.tabId !== tabId || method !== 'Page.javascriptDialogOpening') return;
+    chrome.debugger.onEvent.removeListener(arm.listener);
+    arm.status = 'handling';
+    cdpSend(tabId, 'Page.handleJavaScriptDialog', { accept: action === 'accept', promptText })
+      .then(() => { if (dialogArms.get(port) === arm) arm.result = { ok: true, dialog_type: eventParams.type, message: eventParams.message, action }; })
+      .catch(error => { if (dialogArms.get(port) === arm) arm.result = { ok: false, error: error.message }; });
+  };
+  arm.timer = setTimeout(() => cancelDialogsForPort(port), timeout);
+  dialogArms.set(port, arm);
+  chrome.debugger.onEvent.addListener(arm.listener);
+  return { ok: true, armed: true, tab_id: tabId, expiresAt };
+}
+
 // ── Command Dispatcher ──────────────────────────────────────────────────────
 
 async function dispatch(port, method, params) {
@@ -2489,49 +2530,26 @@ async function dispatch(port, method, params) {
     }
 
     case 'handle_dialog': {
-      // Auto-handle JS alert/confirm/prompt dialogs
-      // Must be set up BEFORE the dialog appears
-      const tab = await getSessionTab(port, false, params.tab_id);
+      const mode = params.mode || 'arm';
+      const existing = dialogArms.get(port);
+      if (mode !== 'arm' && !existing) return { ok: false, error: 'No dialog is armed for this session' };
+      const tab = await getSessionTab(port, false, params.tab_id ?? (mode === 'arm' ? undefined : existing.tabId));
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
-      const action = params.action || 'accept'; // accept, dismiss
-      const promptText = params.text || '';
-
-      await debuggerAttach(tab.id);
-      try {
-        // Enable page events to catch dialogs
-        await cdpSend(tab.id, 'Page.enable', {});
-
-        // Wait for dialog to appear (or handle existing one)
-        const result = await new Promise((resolve) => {
-          const timeout = setTimeout(() => {
-            chrome.debugger.onEvent.removeListener(listener);
-            resolve({ ok: false, error: 'No dialog appeared within timeout' });
-          }, params.timeout || 10000);
-
-          const listener = (source, method, eventParams) => {
-            if (source.tabId !== tab.id || method !== 'Page.javascriptDialogOpening') return;
-            chrome.debugger.onEvent.removeListener(listener);
-            clearTimeout(timeout);
-
-            cdpSend(tab.id, 'Page.handleJavaScriptDialog', {
-              accept: action === 'accept',
-              promptText: promptText,
-            }).then(() => {
-              resolve({
-                ok: true,
-                dialog_type: eventParams.type,
-                message: eventParams.message,
-                action,
-              });
-            }).catch(e => resolve({ ok: false, error: e.message }));
-          };
-          chrome.debugger.onEvent.addListener(listener);
-        });
-
+      if (existing && existing.tabId !== tab.id) return { ok: false, error: 'Dialog is armed for a different tab' };
+      if (mode === 'status') {
+        if (!existing.result) return { ok: true, status: existing.status, expiresAt: existing.expiresAt };
+        const result = existing.result;
+        cancelDialogsForPort(port);
         return result;
-      } finally {
-        await debuggerDetach(tab.id);
       }
+      if (mode === 'cancel') return { ok: true, cancelled: cancelDialogsForPort(port) };
+      if (mode !== 'arm') return { ok: false, error: 'Unknown dialog mode' };
+      const timeout = params.timeout === undefined ? 10000 : params.timeout;
+      if (!Number.isFinite(timeout) || timeout < 1 || timeout > 30000) return { ok: false, error: 'timeout must be 1-30000 ms' };
+      const action = params.action || 'accept';
+      if (action !== 'accept' && action !== 'dismiss') return { ok: false, error: 'action must be accept or dismiss' };
+      await cdpSend(tab.id, 'Page.enable', {});
+      return armDialog(port, tab.id, action, params.text || '', timeout);
     }
 
     case 'wait_for_network': {
