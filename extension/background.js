@@ -130,6 +130,7 @@ async function addTabToSession(port, tabId) {
 
 async function releaseSession(port) {
   cancelDialogsForPort(port);
+  await cancelNetworkCapturesForPort(port);
   const session = sessions.get(port);
   if (!session) return;
 
@@ -333,6 +334,7 @@ function debuggerForceDetach(tabId) {
 chrome.debugger.onDetach.addListener((source, reason) => {
   if (source.tabId) {
     cancelDialogForTab(source.tabId, false);
+    cancelNetworkCapturesForTab(source.tabId, false);
     debuggerAttached.delete(source.tabId);
     if (reason && reason !== 'target_closed') {
       console.log(`[MCP] Debugger auto-detached from tab ${source.tabId} (reason: ${reason})`);
@@ -402,6 +404,7 @@ async function cdpSend(tabId, method, params = {}) {
 // Clean up debugger + session refs when tabs close
 chrome.tabs.onRemoved.addListener((tabId) => {
   cancelDialogForTab(tabId);
+  cancelNetworkCapturesForTab(tabId, false);
   debuggerAttached.delete(tabId);
   for (const [port, session] of sessions) {
     if (!session.tabIds.has(tabId)) continue;
@@ -1838,6 +1841,159 @@ function armDialog(port, tabId, action, promptText, timeout) {
   return { ok: true, armed: true, tab_id: tabId, expiresAt };
 }
 
+// ── Network Capture Lease ────────────────────────────────────────────────────
+
+const networkCaptures = new Map(); // session port → bounded, tab-scoped capture
+const networkCaptureStarts = new Map(); // reserve session/tab during async Network.enable
+const networkDomainUsers = new Map(); // tab ID → capture/waiter count
+const networkDomainTransitions = new Map(); // serialize enable/disable for each tab
+const NETWORK_MAX_RECORDS = 25;
+const NETWORK_MAX_PENDING = 100;
+const NETWORK_MAX_BODY_READS = 25;
+const NETWORK_BODY_CHARS = 2000;
+
+function queueNetworkDomain(tabId, operation) {
+  const previous = networkDomainTransitions.get(tabId) || Promise.resolve();
+  const next = previous.catch(() => {}).then(operation);
+  networkDomainTransitions.set(tabId, next);
+  void next.finally(() => {
+    if (networkDomainTransitions.get(tabId) === next) networkDomainTransitions.delete(tabId);
+  }).catch(() => {});
+  return next;
+}
+
+async function acquireNetworkDomain(tabId) {
+  networkDomainUsers.set(tabId, (networkDomainUsers.get(tabId) || 0) + 1);
+  try {
+    await queueNetworkDomain(tabId, () => networkDomainUsers.has(tabId) ? cdpSend(tabId, 'Network.enable', {}) : undefined);
+  } catch (error) {
+    await releaseNetworkDomain(tabId);
+    throw error;
+  }
+}
+
+async function releaseNetworkDomain(tabId, attached = true) {
+  const count = networkDomainUsers.get(tabId) || 0;
+  if (count <= 1) {
+    networkDomainUsers.delete(tabId);
+    if (count && attached) {
+      try {
+        await queueNetworkDomain(tabId, () => networkDomainUsers.has(tabId) ? undefined : cdpSend(tabId, 'Network.disable', {}));
+      } catch {}
+    }
+  } else {
+    networkDomainUsers.set(tabId, count - 1);
+  }
+}
+
+async function cancelNetworkCapturesForPort(port, attached = true) {
+  const capture = networkCaptures.get(port);
+  if (!capture) return false;
+  networkCaptures.delete(port);
+  clearTimeout(capture.timer);
+  chrome.debugger.onEvent.removeListener(capture.listener);
+  await releaseNetworkDomain(capture.tabId, attached);
+  return true;
+}
+
+function cancelNetworkCapturesForTab(tabId, attached = true) {
+  for (const [port, capture] of networkCaptures) {
+    if (capture.tabId === tabId) void cancelNetworkCapturesForPort(port, attached);
+  }
+}
+
+function retainNetworkRecord(capture, record) {
+  if (networkCaptures.get(capture.port) !== capture) return;
+  capture.records.push({ cursor: ++capture.cursor, ...record });
+  if (capture.records.length > NETWORK_MAX_RECORDS) capture.records.shift();
+}
+
+function trackNetworkRequest(capture, requestId, value) {
+  capture.pending.delete(requestId);
+  capture.pending.set(requestId, value);
+  if (capture.pending.size > NETWORK_MAX_PENDING) {
+    capture.pending.delete(capture.pending.keys().next().value);
+    capture.evictedPending++;
+  }
+}
+
+async function startNetworkCapture(port, tabId, timeout) {
+  if (networkCaptures.has(port) || networkCaptureStarts.has(port)) return { ok: false, error: 'Network capture already active for this session' };
+  if ([...networkCaptures.values()].some(capture => capture.tabId === tabId) || [...networkCaptureStarts.values()].includes(tabId)) {
+    return { ok: false, error: 'Network capture already active for this tab' };
+  }
+  networkCaptureStarts.set(port, tabId);
+  try {
+    await acquireNetworkDomain(tabId);
+  } finally {
+    networkCaptureStarts.delete(port);
+  }
+  const capture = {
+    port, tabId, cursor: 0, records: [], pending: new Map(), processing: 0, evictedPending: 0,
+    expiresAt: Date.now() + timeout, listener: null, timer: null,
+  };
+  capture.listener = (source, method, event) => {
+    if (source.tabId !== tabId) return;
+    const id = event.requestId;
+    if (method === 'Network.requestWillBeSent') {
+      if (event.redirectResponse) {
+        const prior = capture.pending.get(id);
+        retainNetworkRecord(capture, {
+          url: prior?.url || event.redirectResponse.url || '', method: prior?.method || null,
+          status: event.redirectResponse.status, body: null, completion: 'redirect', partial: !prior,
+        });
+      }
+      trackNetworkRequest(capture, id, { url: event.request?.url || '', method: event.request?.method || null, partial: false });
+    } else if (method === 'Network.responseReceived') {
+      const prior = capture.pending.get(id) || { url: event.response?.url || '', method: null, partial: true };
+      prior.url = event.response?.url || prior.url;
+      prior.status = event.response?.status;
+      trackNetworkRequest(capture, id, prior);
+    } else if (method === 'Network.loadingFinished' || method === 'Network.loadingFailed') {
+      const prior = capture.pending.get(id) || { url: '', method: null, partial: true };
+      capture.pending.delete(id);
+      const result = { url: prior.url, method: prior.method, status: prior.status ?? null,
+        body: null, completion: method === 'Network.loadingFailed' ? 'failed' : 'finished', partial: prior.partial };
+      if (method === 'Network.loadingFailed') {
+        result.error = event.errorText || 'Network request failed';
+        retainNetworkRecord(capture, result);
+      } else if (capture.processing >= NETWORK_MAX_BODY_READS) {
+        result.body_skipped_budget = true;
+        retainNetworkRecord(capture, result);
+      } else {
+        capture.processing++;
+        cdpSend(tabId, 'Network.getResponseBody', { requestId: id })
+          .then(body => {
+            result.body = typeof body?.body === 'string' ? body.body.slice(0, NETWORK_BODY_CHARS) : null;
+            result.body_base64 = !!body?.base64Encoded;
+            result.body_truncated = typeof body?.body === 'string' && body.body.length > NETWORK_BODY_CHARS;
+          })
+          .catch(() => { result.body_unavailable = true; })
+          .finally(() => {
+            capture.processing--;
+            retainNetworkRecord(capture, result);
+          });
+      }
+    }
+  };
+  networkCaptures.set(port, capture);
+  chrome.debugger.onEvent.addListener(capture.listener);
+  capture.timer = setTimeout(() => void cancelNetworkCapturesForPort(port), timeout);
+  return { ok: true, tab_id: tabId, cursor: 0, expiresAt: capture.expiresAt };
+}
+
+function readNetworkCapture(capture, cursor, urlPattern) {
+  const first = capture.records[0]?.cursor ?? capture.cursor + 1;
+  return {
+    ok: true, tab_id: capture.tabId, cursor: capture.cursor,
+    expired: cursor < first - 1,
+    evicted_pending: capture.evictedPending,
+    pending: capture.pending.size,
+    processing: capture.processing,
+    records: capture.records.filter(record => record.cursor > cursor && (!urlPattern || record.url.includes(urlPattern))),
+  };
+}
+
 // ── Command Dispatcher ──────────────────────────────────────────────────────
 
 async function dispatch(port, method, params) {
@@ -2584,10 +2740,8 @@ async function dispatch(port, method, params) {
       const urlPattern = params.url_pattern || '';
       const timeout = params.timeout || 15000;
 
-      await debuggerAttach(tab.id);
+      await acquireNetworkDomain(tab.id);
       try {
-        await cdpSend(tab.id, 'Network.enable', {});
-
         const result = await new Promise((resolve) => {
           const timer = setTimeout(() => {
             chrome.debugger.onEvent.removeListener(listener);
@@ -2630,11 +2784,38 @@ async function dispatch(port, method, params) {
           chrome.debugger.onEvent.addListener(listener);
         });
 
-        await cdpSend(tab.id, 'Network.disable', {});
         return result;
       } finally {
+        await releaseNetworkDomain(tab.id);
         await debuggerDetach(tab.id);
       }
+    }
+
+    case 'start_network_capture': {
+      const tab = await getSessionTab(port, false, params.tab_id);
+      if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
+      const timeout = params.timeout === undefined ? 60000 : params.timeout;
+      if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120000) return { ok: false, error: 'timeout must be 1-120000 ms' };
+      return await startNetworkCapture(port, tab.id, timeout);
+    }
+
+    case 'read_network': {
+      const capture = networkCaptures.get(port);
+      if (!capture) return { ok: false, error: 'No network capture is active for this session' };
+      const tab = await getSessionTab(port, false, params.tab_id ?? capture.tabId);
+      if (tab.id !== capture.tabId) return { ok: false, error: 'Network capture belongs to a different tab' };
+      const cursor = params.cursor === undefined ? 0 : params.cursor;
+      if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > capture.cursor) return { ok: false, error: 'Invalid network cursor' };
+      return readNetworkCapture(capture, cursor, params.url_pattern || '');
+    }
+
+    case 'stop_network_capture': {
+      const capture = networkCaptures.get(port);
+      if (!capture) return { ok: false, error: 'No network capture is active for this session' };
+      const tab = await getSessionTab(port, false, params.tab_id ?? capture.tabId);
+      if (tab.id !== capture.tabId) return { ok: false, error: 'Network capture belongs to a different tab' };
+      await cancelNetworkCapturesForPort(port);
+      return { ok: true, stopped: true, tab_id: tab.id };
     }
 
     case 'fetch': {

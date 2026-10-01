@@ -284,6 +284,32 @@ export const TOOLS = [
     },
   },
   {
+    name: 'browser_start_network_capture',
+    description: 'Start a bounded network capture on an owned tab and return before the action that triggers traffic. Then use browser_read_network with the returned cursor; stop it when finished. Captures only traffic after this call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        timeout: { type: 'number', minimum: 1, maximum: 120000, description: 'Capture lifetime in ms (default: 60000)' },
+      },
+    },
+  },
+  {
+    name: 'browser_read_network',
+    description: 'Read retained completed network requests since a capture cursor. Reports cursor expiry if older entries were evicted. If processing is nonzero, read again for pending response bodies. Bodies are truncated at 2000 characters and may be unavailable or skipped under load.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cursor: { type: 'number', minimum: 0, description: 'Cursor returned by browser_start_network_capture or a prior read (default: 0)' },
+        url_pattern: { type: 'string', description: 'Optional URL substring filter' },
+      },
+    },
+  },
+  {
+    name: 'browser_stop_network_capture',
+    description: 'Stop the current session network capture and release its debugger Network domain lease.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'browser_fetch',
     description: 'Make an HTTP request from the extension background (NOT subject to CORS). Use this when page-context fetch would be blocked by CORS or CSP. Useful for API calls to Google, Stripe, Slack APIs while on their pages.',
     inputSchema: {
@@ -504,7 +530,8 @@ const TAB_TARGET_TOOLS = new Set([
   'set_date', 'dismiss_overlays', 'set_combobox', 'drop_file', 'wait', 'press_key',
   'scroll', 'copy_to_clipboard', 'paste_from_clipboard', 'double_click',
   'right_click', 'click_xy', 'reattach_debugger', 'hover', 'select_option',
-  'handle_dialog', 'wait_for_network', 'get_local_storage', 'set_local_storage',
+  'handle_dialog', 'wait_for_network', 'start_network_capture', 'read_network',
+  'stop_network_capture', 'get_local_storage', 'set_local_storage',
   'console_logs', 'ask_user', 'select_frame', 'list_frames', 'solve_captcha',
   'upload_file',
 ]);

@@ -238,6 +238,11 @@ const INSTRUCTIONS = `You control the user's real Chrome browser via this MCP se
 - browser_screenshot captures the visible tab — useful for visual verification
 - The tab is auto-activated before capture, so it always shows the right page
 
+## Network requests caused by an action
+- Call browser_start_network_capture before the click or script that triggers traffic.
+- Call browser_read_network with the returned cursor after the action; if processing is nonzero, read again when bodies are ready.
+- Call browser_stop_network_capture when finished. Traffic before capture starts is not available.
+
 ## Text-based selectors (preferred for dynamic sites)
 - browser_click("text=Get started") — clicks any element containing "Get started"
 - browser_click("button:text(Submit)") — clicks a button containing "Submit"
@@ -328,6 +333,9 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
       browser_select_option: 'select_option',
       browser_handle_dialog: 'handle_dialog',
       browser_wait_for_network: 'wait_for_network',
+      browser_start_network_capture: 'start_network_capture',
+      browser_read_network: 'read_network',
+      browser_stop_network_capture: 'stop_network_capture',
       browser_list_tabs: 'list_tabs',
       browser_get_cookies: 'get_cookies',
       browser_get_local_storage: 'get_local_storage',
