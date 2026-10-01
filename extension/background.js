@@ -1812,6 +1812,13 @@ function armDialog(port, tabId, action, promptText, timeout) {
   arm.listener = (source, method, eventParams) => {
     if (source.tabId !== tabId || method !== 'Page.javascriptDialogOpening') return;
     chrome.debugger.onEvent.removeListener(arm.listener);
+    clearTimeout(arm.timer);
+    // The arm deadline applies only while waiting for a dialog. Keep the handled
+    // outcome briefly so a later serial status call can still observe it.
+    arm.timer = setTimeout(() => {
+      if (dialogArms.get(port) === arm) cancelDialogsForPort(port);
+    }, 60000);
+    arm.timer.unref?.();
     arm.status = 'handling';
     cdpSend(tabId, 'Page.handleJavaScriptDialog', { accept: action === 'accept', promptText })
       .then(() => { if (dialogArms.get(port) === arm) arm.result = { ok: true, dialog_type: eventParams.type, message: eventParams.message, action }; })

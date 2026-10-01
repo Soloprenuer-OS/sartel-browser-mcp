@@ -110,3 +110,12 @@ test('debugger detach after dialog opening does not erase the handled outcome', 
   assert.deepEqual(await f.run(1, { mode: 'status' }),
     { ok: true, dialog_type: 'confirm', message: 'Navigate?', action: 'accept' });
 });
+
+test('arm expiry cannot erase a dialog that already opened', async () => {
+  const f = fixture();
+  await f.run(1, { timeout: 10 });
+  f.fire(10, 'confirm', 'Proceed?');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(await f.run(1, { mode: 'status' }),
+    { ok: true, dialog_type: 'confirm', message: 'Proceed?', action: 'accept' });
+});
