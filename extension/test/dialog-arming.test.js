@@ -10,7 +10,7 @@ const caseStart = source.indexOf("case 'handle_dialog': {");
 const caseEnd = source.indexOf("case 'wait_for_network': {", caseStart);
 assert(caseStart >= 0 && caseEnd > caseStart);
 
-function fixture() {
+function fixture({ sendCommand, waitForTab } = {}) {
   const listeners = new Set();
   const commands = [];
   const chrome = { debugger: { onEvent: {
@@ -24,17 +24,19 @@ function fixture() {
   const make = new Function('chrome', 'getSessionTab', 'debuggerAttach', 'cdpSend', 'debuggerDetach',
     `${helpers}; return { run: async (port, params) => { ${body} },
       release: typeof cancelDialogsForPort === 'function' ? cancelDialogsForPort : () => {},
-      detach: typeof cancelDialogForTab === 'function' ? id => cancelDialogForTab(id, false) : () => {} };`);
-  const { run, release, detach } = make(chrome,
+      detach: typeof cancelDialogForTab === 'function' ? id => cancelDialogForTab(id, false) : () => {},
+      tabClose: typeof cancelDialogForTab === 'function' ? id => cancelDialogForTab(id) : () => {} };`);
+  const { run, release, detach, tabClose } = make(chrome,
     async (port, _activate, requestedTabId) => {
+      if (waitForTab) await waitForTab();
       const ownedId = port === 1 ? 10 : 20;
       if (requestedTabId !== undefined && requestedTabId !== ownedId) throw Error('Tab does not belong to this session');
       return { id: ownedId, url: 'https://example.com/' };
     },
     async () => {},
-    async (_tabId, method, params) => { commands.push({ method, params }); },
+    async (_tabId, method, params) => { commands.push({ method, params }); if (sendCommand) return await sendCommand(method, params); },
     async () => {});
-  return { run, release, detach, commands, listenerCount: () => listeners.size,
+  return { run, release, detach, tabClose, commands, listenerCount: () => listeners.size,
     fire: (tabId, type, message) => { for (const listener of [...listeners]) listener({ tabId }, 'Page.javascriptDialogOpening', { type, message }); } };
 }
 
@@ -118,4 +120,30 @@ test('arm expiry cannot erase a dialog that already opened', async () => {
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(await f.run(1, { mode: 'status' }),
     { ok: true, dialog_type: 'confirm', message: 'Proceed?', action: 'accept' });
+});
+
+test('session release or tab close during Page.enable cannot install a dialog arm afterward', async () => {
+  for (const teardown of ['release', 'tabClose']) {
+    let finishEnable;
+    const enabled = new Promise(resolve => { finishEnable = resolve; });
+    const f = fixture({ sendCommand: method => method === 'Page.enable' ? enabled : {} });
+    const starting = f.run(1, { timeout: 100 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    teardown === 'release' ? f.release(1) : f.tabClose(10);
+    finishEnable({});
+    const result = await starting;
+    assert.equal(result.ok, false, teardown);
+    assert.equal(f.listenerCount(), 0, teardown);
+  }
+});
+
+test('session release during tab lookup cannot arm a dialog afterward', async () => {
+  let finishLookup;
+  const lookup = new Promise(resolve => { finishLookup = resolve; });
+  const f = fixture({ waitForTab: () => lookup });
+  const starting = f.run(1, { timeout: 100 });
+  f.release(1);
+  finishLookup();
+  assert.equal((await starting).ok, false);
+  assert.equal(f.listenerCount(), 0);
 });

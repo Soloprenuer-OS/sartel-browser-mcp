@@ -1788,10 +1788,15 @@ async function dropFileOnTarget(tabId, selector, files) {
 // ── JavaScript Dialog Lease ──────────────────────────────────────────────────
 
 const dialogArms = new Map(); // session port → one bounded listener/result
+const dialogStarts = new Map(); // reserve session/tab while Page.enable is pending
+const dialogEpochs = new Map(); // invalidate starts begun before session teardown
 
 function cancelDialogsForPort(port) {
+  dialogEpochs.set(port, (dialogEpochs.get(port) || 0) + 1);
+  const starting = dialogStarts.get(port);
+  if (starting) starting.cancelled = true;
   const arm = dialogArms.get(port);
-  if (!arm) return false;
+  if (!arm) return !!starting;
   clearTimeout(arm.timer);
   chrome.debugger.onEvent.removeListener(arm.listener);
   dialogArms.delete(port);
@@ -1799,6 +1804,9 @@ function cancelDialogsForPort(port) {
 }
 
 function cancelDialogForTab(tabId, includeHandling = true) {
+  for (const [port, starting] of dialogStarts) {
+    if (starting.tabId === tabId) cancelDialogsForPort(port);
+  }
   for (const [port, arm] of dialogArms) {
     if (arm.tabId === tabId && (includeHandling || arm.status === 'armed')) cancelDialogsForPort(port);
   }
@@ -2537,6 +2545,7 @@ async function dispatch(port, method, params) {
     }
 
     case 'handle_dialog': {
+      const epoch = dialogEpochs.get(port) || 0;
       const mode = params.mode || 'arm';
       const existing = dialogArms.get(port);
       if (mode !== 'arm' && !existing) return { ok: false, error: 'No dialog is armed for this session' };
@@ -2555,8 +2564,18 @@ async function dispatch(port, method, params) {
       if (!Number.isFinite(timeout) || timeout < 1 || timeout > 30000) return { ok: false, error: 'timeout must be 1-30000 ms' };
       const action = params.action || 'accept';
       if (action !== 'accept' && action !== 'dismiss') return { ok: false, error: 'action must be accept or dismiss' };
-      await cdpSend(tab.id, 'Page.enable', {});
-      return armDialog(port, tab.id, action, params.text || '', timeout);
+      if (dialogStarts.has(port) || dialogArms.has(port)) return { ok: false, error: 'A dialog is already armed for this session' };
+      if ([...dialogStarts.values()].some(starting => starting.tabId === tab.id)) return { ok: false, error: 'A dialog is already armed for this tab' };
+      if ((dialogEpochs.get(port) || 0) !== epoch) return { ok: false, error: 'Dialog arming was cancelled' };
+      const starting = { tabId: tab.id, cancelled: false };
+      dialogStarts.set(port, starting);
+      try {
+        await cdpSend(tab.id, 'Page.enable', {});
+        if (starting.cancelled || (dialogEpochs.get(port) || 0) !== epoch) return { ok: false, error: 'Dialog arming was cancelled' };
+        return armDialog(port, tab.id, action, params.text || '', timeout);
+      } finally {
+        dialogStarts.delete(port);
+      }
     }
 
     case 'wait_for_network': {
