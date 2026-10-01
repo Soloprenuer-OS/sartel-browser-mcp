@@ -1,0 +1,61 @@
+{
+  "idA": 1926984646,
+  "idB": 1926984647,
+  "navA": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"title\": \"CHAT A • RED\",\n  \"url\": \"http://127.0.0.1:7331/red\",\n  \"tab_id\": 1926984646,\n  \"session\": \"Claude 1\"\n}"
+      }
+    ]
+  },
+  "navB": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"title\": \"CHAT B • BLUE\",\n  \"url\": \"http://127.0.0.1:7331/blue\",\n  \"tab_id\": 1926984647,\n  \"session\": \"Claude 2\"\n}"
+      }
+    ]
+  },
+  "tabsA": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"tabs\": [\n    {\n      \"id\": 1926984646,\n      \"url\": \"http://127.0.0.1:7331/red\",\n      \"title\": \"CHAT A • RED\",\n      \"active\": false\n    }\n  ],\n  \"session\": \"Claude 1\",\n  \"color\": \"blue\"\n}"
+      }
+    ]
+  },
+  "tabsB": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"tabs\": [\n    {\n      \"id\": 1926984647,\n      \"url\": \"http://127.0.0.1:7331/blue\",\n      \"title\": \"CHAT B • BLUE\",\n      \"active\": false\n    }\n  ],\n  \"session\": \"Claude 2\",\n  \"color\": \"green\"\n}"
+      }
+    ]
+  },
+  "readA": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"content\": \"CHAT A • RED\\nReal Chrome extension + two MCP processes\",\n  \"url\": \"http://127.0.0.1:7331/red\",\n  \"title\": \"CHAT A • RED\"\n}"
+      }
+    ]
+  },
+  "readB": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"content\": \"CHAT B • BLUE\\nReal Chrome extension + two MCP processes\",\n  \"url\": \"http://127.0.0.1:7331/blue\",\n  \"title\": \"CHAT B • BLUE\"\n}"
+      }
+    ]
+  },
+  "denied": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Error: Tab 1926984646 does not belong to this session"
+      }
+    ],
+    "isError": true
+  }
+}
