@@ -9,7 +9,7 @@ const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 
 const caseStart = source.indexOf("case 'start_network_capture': {");
 const caseEnd = source.indexOf("case 'fetch': {", caseStart);
 
-function fixture({ getBody, sendCommand } = {}) {
+function fixture({ getBody, sendCommand, waitForTab } = {}) {
   assert(caseStart >= 0 && caseEnd > caseStart, 'network capture dispatcher cases exist');
   const helperStart = source.indexOf('// ── Network Capture Lease');
   const helperEnd = source.indexOf('// ── Command Dispatcher', helperStart);
@@ -31,6 +31,7 @@ function fixture({ getBody, sendCommand } = {}) {
   chrome.debugger.onEventListeners = listeners;
   const api = make(chrome,
     async (port, _activate, requestedTabId) => {
+      if (waitForTab) await waitForTab();
       const tabId = port === 1 ? 10 : 20;
       if (requestedTabId !== undefined && requestedTabId !== tabId) throw Error('Foreign tab');
       return { id: tabId, url: 'https://example.com/' };
@@ -205,4 +206,30 @@ test('concurrent starts cannot replace the same session capture or leak a listen
   assert.deepEqual(outcomes.map(result => result.ok).sort(), [false, true]);
   assert.equal(f.listeners().length, 1);
   await f.run('stop_network_capture', 1, {});
+});
+
+test('session release during Network.enable cannot install a capture afterward', async () => {
+  let finishEnable;
+  const enabled = new Promise(resolve => { finishEnable = resolve; });
+  const f = fixture({ sendCommand: method => method === 'Network.enable' ? enabled : {} });
+  const starting = f.run('start_network_capture', 1, { timeout: 1000 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await f.release(1);
+  finishEnable({});
+  const outcome = await starting;
+  assert.equal(outcome.ok, false);
+  assert.equal(f.listeners().length, 0);
+  assert.equal((await f.run('read_network', 1, {})).ok, false);
+});
+
+test('session release during tab lookup cannot start a capture afterward', async () => {
+  let finishLookup;
+  const lookup = new Promise(resolve => { finishLookup = resolve; });
+  const f = fixture({ waitForTab: () => lookup });
+  const starting = f.run('start_network_capture', 1, { timeout: 1000 });
+  await f.release(1);
+  finishLookup();
+  const outcome = await starting;
+  assert.equal(outcome.ok, false);
+  assert.equal(f.listeners().length, 0);
 });

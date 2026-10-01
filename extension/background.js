@@ -1845,6 +1845,7 @@ function armDialog(port, tabId, action, promptText, timeout) {
 
 const networkCaptures = new Map(); // session port → bounded, tab-scoped capture
 const networkCaptureStarts = new Map(); // reserve session/tab during async Network.enable
+const networkCaptureEpochs = new Map(); // invalidate starts begun before session teardown
 const networkDomainUsers = new Map(); // tab ID → capture/waiter count
 const networkDomainTransitions = new Map(); // serialize enable/disable for each tab
 const NETWORK_MAX_RECORDS = 25;
@@ -1887,8 +1888,14 @@ async function releaseNetworkDomain(tabId, attached = true) {
 }
 
 async function cancelNetworkCapturesForPort(port, attached = true) {
+  networkCaptureEpochs.set(port, (networkCaptureEpochs.get(port) || 0) + 1);
+  const starting = networkCaptureStarts.get(port);
+  if (starting) {
+    starting.cancelled = true;
+    starting.attached = attached;
+  }
   const capture = networkCaptures.get(port);
-  if (!capture) return false;
+  if (!capture) return !!starting;
   networkCaptures.delete(port);
   clearTimeout(capture.timer);
   chrome.debugger.onEvent.removeListener(capture.listener);
@@ -1899,6 +1906,9 @@ async function cancelNetworkCapturesForPort(port, attached = true) {
 function cancelNetworkCapturesForTab(tabId, attached = true) {
   for (const [port, capture] of networkCaptures) {
     if (capture.tabId === tabId) void cancelNetworkCapturesForPort(port, attached);
+  }
+  for (const [port, starting] of networkCaptureStarts) {
+    if (starting.tabId === tabId) void cancelNetworkCapturesForPort(port, attached);
   }
 }
 
@@ -1917,14 +1927,20 @@ function trackNetworkRequest(capture, requestId, value) {
   }
 }
 
-async function startNetworkCapture(port, tabId, timeout) {
+async function startNetworkCapture(port, tabId, timeout, expectedEpoch) {
+  if ((networkCaptureEpochs.get(port) || 0) !== expectedEpoch) return { ok: false, error: 'Network capture start was cancelled' };
   if (networkCaptures.has(port) || networkCaptureStarts.has(port)) return { ok: false, error: 'Network capture already active for this session' };
-  if ([...networkCaptures.values()].some(capture => capture.tabId === tabId) || [...networkCaptureStarts.values()].includes(tabId)) {
+  if ([...networkCaptures.values()].some(capture => capture.tabId === tabId) || [...networkCaptureStarts.values()].some(starting => starting.tabId === tabId)) {
     return { ok: false, error: 'Network capture already active for this tab' };
   }
-  networkCaptureStarts.set(port, tabId);
+  const starting = { tabId, cancelled: false, attached: true };
+  networkCaptureStarts.set(port, starting);
   try {
     await acquireNetworkDomain(tabId);
+    if (starting.cancelled || (networkCaptureEpochs.get(port) || 0) !== expectedEpoch) {
+      await releaseNetworkDomain(tabId, starting.attached);
+      return { ok: false, error: 'Network capture start was cancelled' };
+    }
   } finally {
     networkCaptureStarts.delete(port);
   }
@@ -2792,11 +2808,12 @@ async function dispatch(port, method, params) {
     }
 
     case 'start_network_capture': {
+      const epoch = networkCaptureEpochs.get(port) || 0;
       const tab = await getSessionTab(port, false, params.tab_id);
       if (tab.url.startsWith('chrome://')) throw new Error('Cannot interact with chrome:// pages');
       const timeout = params.timeout === undefined ? 60000 : params.timeout;
       if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120000) return { ok: false, error: 'timeout must be 1-120000 ms' };
-      return await startNetworkCapture(port, tab.id, timeout);
+      return await startNetworkCapture(port, tab.id, timeout, epoch);
     }
 
     case 'read_network': {
