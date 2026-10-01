@@ -261,13 +261,14 @@ export const TOOLS = [
   },
   {
     name: 'browser_handle_dialog',
-    description: 'Handle JavaScript alert(), confirm(), or prompt() dialogs. Call this BEFORE triggering the action that causes the dialog. Waits for the dialog to appear, then accepts or dismisses it.',
+    description: 'Arm one JavaScript alert(), confirm(), or prompt() handler and return immediately. Then trigger the dialog with a separate browser action, and call again with mode=status to read the outcome. Use mode=cancel to disarm. The arm expires after timeout.',
     inputSchema: {
       type: 'object',
       properties: {
+        mode: { type: 'string', enum: ['arm', 'status', 'cancel'], description: 'arm (default) returns before the trigger; status reads the result; cancel disarms.' },
         action: { type: 'string', enum: ['accept', 'dismiss'], description: 'Accept or dismiss the dialog (default: accept)' },
         text: { type: 'string', description: 'Text to enter for prompt() dialogs' },
-        timeout: { type: 'number', description: 'Max wait for dialog in ms (default: 10000)' },
+        timeout: { type: 'number', minimum: 1, maximum: 30000, description: 'Arm lifetime in ms (default: 10000, max: 30000)' },
       },
     },
   },
