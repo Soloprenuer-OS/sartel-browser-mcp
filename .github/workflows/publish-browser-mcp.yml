@@ -28,7 +28,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: Match the release tag to the package
         run: |
-          node -e 'const v=require("./package.json").version; if (process.env.GITHUB_REF_NAME !== `browser-mcp-v${v}`) { console.error("Tag/package version mismatch"); process.exit(1) }'
+          node -e 'const v=require("./package.json").version; if (process.env.GITHUB_REF_NAME !== "browser-mcp-v"+v) { console.error("Tag/package version mismatch"); process.exit(1) }'
           npm --version
       - run: npm ci
       - run: npm test
