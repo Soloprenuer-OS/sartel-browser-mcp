@@ -131,6 +131,7 @@ async function addTabToSession(port, tabId) {
 async function releaseSession(port) {
   cancelDialogsForPort(port);
   await cancelNetworkCapturesForPort(port);
+  clearAxRefsForPort(port);
   const session = sessions.get(port);
   if (!session) return;
 
@@ -405,6 +406,7 @@ async function cdpSend(tabId, method, params = {}) {
 chrome.tabs.onRemoved.addListener((tabId) => {
   cancelDialogForTab(tabId);
   cancelNetworkCapturesForTab(tabId, false);
+  clearAxRefsForTab(tabId);
   debuggerAttached.delete(tabId);
   for (const [port, session] of sessions) {
     if (!session.tabIds.has(tabId)) continue;
@@ -2010,6 +2012,153 @@ function readNetworkCapture(capture, cursor, urlPattern) {
   };
 }
 
+// ── AX Reference Actions ───────────────────────────────────────────────────
+// References exist only in this service-worker instance. Suspension invalidates
+// them rather than restoring a node identity that may now refer to another page.
+const axRefs = new Map();
+const AX_MAX_NODES = 80;
+const AX_MAX_CONTEXT = 16;
+const AX_MAX_REFS = 400;
+const AX_REF_TTL_MS = 5 * 60 * 1000;
+const AX_ACTION_ROLES = new Set(['button', 'link', 'textbox', 'checkbox', 'radio', 'switch', 'combobox', 'menuitem']);
+
+function clearAxRefsForPort(port) {
+  for (const [ref, entry] of axRefs) if (entry.port === port) axRefs.delete(ref);
+}
+
+function clearAxRefsForTab(tabId) {
+  for (const [ref, entry] of axRefs) if (entry.tabId === tabId) axRefs.delete(ref);
+}
+
+async function axDocumentId(tabId) {
+  const { root } = await cdpSend(tabId, 'DOM.getDocument', { depth: 0 });
+  if (!root?.backendNodeId) throw new Error('Cannot identify the current document; observe again');
+  return root.backendNodeId;
+}
+
+async function observeAx(port, tab) {
+  const documentId = await axDocumentId(tab.id);
+  const { frameTree } = await cdpSend(tab.id, 'Page.getFrameTree');
+  const frameId = frameTree?.frame?.id;
+  if (!frameId) throw new Error('Cannot identify the current frame');
+  const { nodes: rawNodes } = await cdpSend(tab.id, 'Accessibility.getFullAXTree', { frameId });
+  // A new observation supersedes old refs for this owned tab. Its output is
+  // bounded even on huge pages; controls without a name remain discoverable by
+  // role, while nameless static wrappers are excluded.
+  clearAxRefsForTab(tab.id);
+  const candidates = (rawNodes || []).filter(node => {
+    if (node.ignored || !node.backendDOMNodeId) return false;
+    const role = node.role?.value || '';
+    return AX_ACTION_ROLES.has(role) || !!node.name?.value;
+  });
+  // Named static text can dominate a page's AX tree. Reserve the bounded result
+  // for actionable controls first, then add a little surrounding text. Restore
+  // document order so the model still sees a coherent page sequence.
+  const indexed = candidates.map((node, index) => ({ node, index }));
+  const context = indexed.filter(({ node }) => !AX_ACTION_ROLES.has(node.role?.value || '')).slice(0, AX_MAX_CONTEXT);
+  const actions = indexed.filter(({ node }) => AX_ACTION_ROLES.has(node.role?.value || '')).slice(0, AX_MAX_NODES - context.length);
+  const selected = [...actions, ...context].sort((a, b) => a.index - b.index);
+  const nodes = selected.map(({ node }) => {
+    const role = String(node.role?.value || 'unknown');
+    const name = String(node.name?.value || '').slice(0, 160);
+    const result = { role, name };
+    if (AX_ACTION_ROLES.has(role)) {
+      const ref = crypto.randomUUID();
+      axRefs.set(ref, { port, tabId: tab.id, documentId, frameId, backendNodeId: node.backendDOMNodeId,
+        role, observedAt: Date.now() });
+      result.ref = ref;
+    }
+    return result;
+  });
+  while (axRefs.size > AX_MAX_REFS) axRefs.delete(axRefs.keys().next().value);
+  return { ok: true, tab_id: tab.id, frame_id: frameId, url: tab.url, title: tab.title,
+    nodes, truncated: candidates.length > selected.length };
+}
+
+async function resolveAxRef(port, tab, ref, allowedRoles) {
+  const entry = axRefs.get(ref);
+  if (!entry) throw new Error('Stale AX reference — observe the page again');
+  if (entry.port !== port || entry.tabId !== tab.id) throw new Error('AX reference does not belong to this session and tab');
+  if (Date.now() - entry.observedAt > AX_REF_TTL_MS) {
+    axRefs.delete(ref);
+    throw new Error('Stale AX reference — observe the page again');
+  }
+  if (allowedRoles && !allowedRoles.includes(entry.role)) throw new Error(`AX reference role ${entry.role} cannot be used for this action`);
+  if (await axDocumentId(tab.id) !== entry.documentId) {
+    clearAxRefsForTab(tab.id);
+    throw new Error('Stale AX reference — document changed; observe again');
+  }
+  try {
+    const { object } = await cdpSend(tab.id, 'DOM.resolveNode', { backendNodeId: entry.backendNodeId });
+    if (!object?.objectId) throw new Error('node detached');
+    return { entry, objectId: object.objectId };
+  } catch {
+    axRefs.delete(ref);
+    throw new Error('Stale AX reference — node detached; observe again');
+  }
+}
+
+async function clickAxRef(port, tab, ref) {
+  const { entry, objectId } = await resolveAxRef(port, tab, ref,
+    ['button', 'link', 'checkbox', 'radio', 'switch', 'menuitem']);
+  await cdpSend(tab.id, 'Runtime.callFunctionOn', { objectId,
+    functionDeclaration: 'function(){ this.scrollIntoView({block:"center",inline:"center",behavior:"instant"}); return true; }',
+    returnByValue: true });
+  let model;
+  try {
+    ({ model } = await cdpSend(tab.id, 'DOM.getBoxModel', { backendNodeId: entry.backendNodeId }));
+  } catch {
+    throw new Error('AX reference is not visible — observe or scroll again');
+  }
+  const quad = model?.content;
+  if (!Array.isArray(quad) || quad.length !== 8) throw new Error('AX reference has no clickable geometry');
+  const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+  const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+  const { result } = await cdpSend(tab.id, 'Runtime.callFunctionOn', { objectId, returnByValue: true,
+    functionDeclaration: `function(x,y){
+      const root=this.getRootNode();
+      const outer=document.elementFromPoint(x,y);
+      const inner=root===document?outer:root.elementFromPoint(x,y);
+      let host=this;
+      while(host.getRootNode().host) host=host.getRootNode().host;
+      const outerHit=outer===host||host.contains(outer);
+      const innerHit=inner===this||this.contains(inner);
+      return { connected:this.isConnected, disabled:!!this.disabled||this.getAttribute('aria-disabled')==='true',
+        blocked:!outerHit||!innerHit };
+    }`,
+    arguments: [{ value: x }, { value: y }] });
+  const check = result?.value;
+  if (!check?.connected) throw new Error('Stale AX reference — node detached; observe again');
+  if (check.disabled) throw new Error('AX reference is disabled');
+  if (check.blocked) throw new Error('AX reference is obscured or covered; observe again');
+  await debuggerClick(tab.id, x, y);
+  clearAxRefsForTab(tab.id);
+  return { ok: true, tab_id: tab.id, action: 'click', verify: 'Call browser_observe to check the resulting page state' };
+}
+
+async function fillAxRef(port, tab, ref, value) {
+  if (typeof value !== 'string') throw new Error('Fill value must be text');
+  const { entry, objectId } = await resolveAxRef(port, tab, ref, ['textbox']);
+  const { result: stateResult } = await cdpSend(tab.id, 'Runtime.callFunctionOn', { objectId, returnByValue: true,
+    functionDeclaration: `function(){ return { connected:this.isConnected, disabled:!!this.disabled,
+      readOnly:!!this.readOnly, editable:this.matches('input:not([type=password]),textarea') }; }` });
+  const state = stateResult?.value;
+  if (!state?.connected) throw new Error('Stale AX reference — node detached; observe again');
+  if (state.disabled || state.readOnly || !state.editable) throw new Error('AX reference is not an editable text field');
+  await cdpSend(tab.id, 'DOM.focus', { backendNodeId: entry.backendNodeId });
+  await cdpSend(tab.id, 'Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: SELECT_ALL_MODS });
+  await cdpSend(tab.id, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA' });
+  await cdpSend(tab.id, 'Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace' });
+  await cdpSend(tab.id, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace' });
+  await cdpSend(tab.id, 'Input.insertText', { text: value });
+  const { result } = await cdpSend(tab.id, 'Runtime.callFunctionOn', { objectId,
+    functionDeclaration: 'function(){ return this.value; }', returnByValue: true });
+  if (result?.value !== value) throw new Error('Fill did not produce the requested value; observe the field again');
+  clearAxRefsForTab(tab.id);
+  return { ok: true, tab_id: tab.id, action: 'fill', value: result.value,
+    verify: 'Call browser_observe to check the resulting page state' };
+}
+
 // ── Command Dispatcher ──────────────────────────────────────────────────────
 
 async function dispatch(port, method, params) {
@@ -2017,6 +2166,7 @@ async function dispatch(port, method, params) {
     case 'navigate': {
       const session = getSession(port);
       let tab = await getSessionTab(port, false, params.tab_id);
+      clearAxRefsForTab(tab.id);
 
       // Always reuse the active tab — navigate in place, don't create new tabs
       // Only create new tab if explicitly requested via new_tab param
@@ -2052,6 +2202,12 @@ async function dispatch(port, method, params) {
         result.hint = `CAPTCHA detected: ${captcha.types.join(', ')}. Use browser_solve_captcha to handle it.`;
       }
       return result;
+    }
+
+    case 'observe': {
+      const tab = await getSessionTab(port, false, params.tab_id);
+      if (tab.url.startsWith('chrome://')) throw new Error('Cannot observe chrome:// pages');
+      return observeAx(port, tab);
     }
 
     case 'get_page_content': {
@@ -2238,6 +2394,16 @@ async function dispatch(port, method, params) {
         ' | raw: ' + JSON.stringify(rawDbg) +
         ' | scripting-diag: ' + JSON.stringify(diag)
       );
+    }
+
+    case 'click_ref': {
+      const tab = await getSessionTab(port, false, params.tab_id);
+      return clickAxRef(port, tab, params.ref);
+    }
+
+    case 'fill_ref': {
+      const tab = await getSessionTab(port, false, params.tab_id);
+      return fillAxRef(port, tab, params.ref, params.value);
     }
 
     case 'click': {

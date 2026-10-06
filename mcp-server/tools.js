@@ -8,6 +8,41 @@
 
 export const TOOLS = [
   {
+    name: 'browser_observe',
+    description: 'Observe the owned tab through Chrome accessibility nodes. Returns bounded roles/names and opaque refs for actionable elements in the main frame. Use a returned ref with browser_click_ref or browser_fill_ref, then observe again to verify the outcome. Refs expire on navigation, a new observation, or extension suspension.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tab_id: { type: 'number', description: 'Owned tab ID; omit to use this session’s active tab' },
+      },
+    },
+  },
+  {
+    name: 'browser_click_ref',
+    description: 'Click a button/link/control by an opaque ref from the latest browser_observe. Validates session, tab, document, attachment and obstruction immediately before the click. Observe again afterward to verify page state. Use browser_click CSS/text fallback for unsupported elements.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Opaque ref returned by browser_observe' },
+        tab_id: { type: 'number', description: 'Owned tab ID returned by browser_observe' },
+      },
+      required: ['ref'],
+    },
+  },
+  {
+    name: 'browser_fill_ref',
+    description: 'Fill a plain text input/textarea by an opaque textbox ref from browser_observe, then verify the exact field value. Password, rich-text and transformed/masked fields require existing specialized tools. Observe again to verify broader page state.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Opaque textbox ref returned by browser_observe' },
+        value: { type: 'string', description: 'Text to enter' },
+        tab_id: { type: 'number', description: 'Owned tab ID returned by browser_observe' },
+      },
+      required: ['ref', 'value'],
+    },
+  },
+  {
     name: 'browser_navigate',
     description: 'Navigate the active browser tab to a URL. Reuses the current tab by default (no tab spam). Pass new_tab=true only when you need to keep the current page open.',
     inputSchema: {

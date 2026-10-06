@@ -1,6 +1,6 @@
 {
   "name": "@sartel/browser-mcp",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Sartel Browser MCP — a local stdio MCP server that lets a Sartel agent drive the user's real, logged-in Chrome through the Sartel browser extension. Fork of Agent360dk/browser-mcp (MIT).",
   "type": "module",
   "main": "index.js",

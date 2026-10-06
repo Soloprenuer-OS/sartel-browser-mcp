@@ -244,6 +244,7 @@ const INSTRUCTIONS = `You control the user's real Chrome browser via this MCP se
 - Call browser_stop_network_capture when finished. Traffic before capture starts is not available.
 
 ## Text-based selectors (preferred for dynamic sites)
+- Use browser_observe for accessible controls and browser_click_ref/browser_fill_ref with its returned refs. Observe again after each action to verify the requested change; a click acknowledgement alone is not proof of task completion. Re-observe after any stale/obscured ref error. The first ref slice covers the main frame; use existing selector/screenshot tools for unsupported controls and frames.
 - browser_click("text=Get started") — clicks any element containing "Get started"
 - browser_click("button:text(Submit)") — clicks a button containing "Submit"
 - browser_fill("text=Email", "user@example.com") — fills input near "Email" label
@@ -321,6 +322,9 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     const methodMap = {
       browser_navigate: 'navigate',
       browser_get_page_content: 'get_page_content',
+      browser_observe: 'observe',
+      browser_click_ref: 'click_ref',
+      browser_fill_ref: 'fill_ref',
       browser_screenshot: 'screenshot',
       browser_execute_script: 'execute_script',
       browser_click: 'click',
